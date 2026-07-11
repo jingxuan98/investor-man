@@ -17,20 +17,15 @@ export default async function ResearchPage({
     notFound();
   }
 
-  // No API key configured → explain instead of erroring. The key is read
-  // server-side only and never shipped to the client.
-  if (!process.env.GEMINI_API_KEY) {
-    return (
-      <div className="card p-6">
-        <h2 className="mb-2 text-lg font-semibold text-ink">AI research is disabled</h2>
-        <p className="text-sm text-ink3">
-          Add <code className="rounded bg-track px-1 py-0.5">GEMINI_API_KEY</code> to{" "}
-          <code className="rounded bg-track px-1 py-0.5">.env.local</code> to enable AI research
-          reports.
-        </p>
-      </div>
-    );
-  }
-
-  return <ResearchClient ticker={snapshot.ticker} />;
+  // The server key is only one possible source of a Gemini key — in
+  // production (Vercel) there is no GEMINI_API_KEY env var by design, and
+  // the user supplies their own key from the browser instead (see
+  // GeminiKeyButton + lib/geminiKeyHeader.ts, sent as x-gemini-key per
+  // request). So ResearchClient must always render and stay interactive;
+  // it's the one that knows (from localStorage, client-side) whether a
+  // browser key is present, and shows its own inline hint banner when
+  // neither source has a key.
+  return (
+    <ResearchClient ticker={snapshot.ticker} hasServerKey={Boolean(process.env.GEMINI_API_KEY)} />
+  );
 }

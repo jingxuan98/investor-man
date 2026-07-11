@@ -1,9 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { geminiHeaders } from "@/lib/geminiKeyHeader";
+import { geminiHeaders, GEMINI_KEY_STORAGE_KEY } from "@/lib/geminiKeyHeader";
+import { exportReportPdf } from "@/lib/exportPdf";
 
 type ReportType = "research" | "model3" | "bear" | "bull" | "risks" | "deepdive";
 
@@ -40,15 +41,44 @@ const REPORTS: { type: ReportType; label: string; desc: string }[] = [
   },
 ];
 
-export default function ResearchClient({ ticker }: { ticker: string }) {
+const NO_KEY_HINT =
+  "Add your free Gemini API key via the key button in the header to enable reports — aistudio.google.com/apikey.";
+
+export default function ResearchClient({
+  ticker,
+  hasServerKey,
+}: {
+  ticker: string;
+  hasServerKey: boolean;
+}) {
   const [active, setActive] = useState<ReportType | null>(null);
   const [text, setText] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Whether a browser (BYO) key is present in localStorage. Checked once on
+  // mount (client-only — the server has no visibility into localStorage) so
+  // we can show a friendly inline hint when NEITHER the server env key nor a
+  // browser key is available. The report buttons stay enabled either way —
+  // a 503 from the server carries the same hint if the user clicks through.
+  const [hasBrowserKey, setHasBrowserKey] = useState(false);
+  const reportRef = useRef<HTMLElement>(null);
+  const [pdfNote, setPdfNote] = useState<string | null>(null);
   // Monotonic run token: a newer run retires older ones so their appends don't
   // interleave into the current report.
   const runId = useRef(0);
+
+  useEffect(() => {
+    setHasBrowserKey(!!window.localStorage.getItem(GEMINI_KEY_STORAGE_KEY));
+  }, []);
+
+  function handleExportPdf() {
+    setPdfNote(null);
+    if (!reportRef.current) return;
+    const label = REPORTS.find((r) => r.type === active)?.label ?? "AI Research Report";
+    const ok = exportReportPdf(`${ticker} — ${label}`, reportRef.current.innerHTML);
+    if (!ok) setPdfNote("Your browser blocked the popup — allow popups for this site to export.");
+  }
 
   async function run(type: ReportType, force: boolean) {
     const id = ++runId.current;
@@ -124,6 +154,12 @@ export default function ResearchClient({ ticker }: { ticker: string }) {
 
   return (
     <div className="space-y-6">
+      {!hasServerKey && !hasBrowserKey && (
+        <div className="rounded-lg border border-amber bg-amber-tint p-4 text-sm text-amber">
+          {NO_KEY_HINT}
+        </div>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {REPORTS.map((r) => (
           <button
@@ -151,7 +187,15 @@ export default function ResearchClient({ ticker }: { ticker: string }) {
       {active && !error && (
         <div className="card p-6">
           {streaming && text === "" && <p className="text-sm text-ink2">Generating report…</p>}
-          <article className="report-md">
+          {done && (
+            <div className="mb-3 flex justify-end">
+              <button onClick={handleExportPdf} className="btn btn-outline !py-1 text-xs">
+                Export PDF
+              </button>
+            </div>
+          )}
+          {pdfNote && <p className="mb-3 text-xs text-ink2">{pdfNote}</p>}
+          <article ref={reportRef} className="report-md">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
           </article>
           {streaming && text !== "" && <p className="mt-4 text-sm text-ink2">Streaming…</p>}

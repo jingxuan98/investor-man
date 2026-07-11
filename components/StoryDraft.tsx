@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { geminiHeaders } from "@/lib/geminiKeyHeader";
+import { exportReportPdf } from "@/lib/exportPdf";
 
 // The Story tab's "Draft with AI" enrichment — a single-button variant of
 // ResearchClient's fetch/stream pattern, fixed to the "story" report type.
@@ -16,9 +17,18 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
   const [streaming, setStreaming] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pdfNote, setPdfNote] = useState<string | null>(null);
+  const draftRef = useRef<HTMLElement>(null);
   // Monotonic run token: a newer run retires older ones so their appends don't
   // interleave into the current draft.
   const runId = useRef(0);
+
+  function handleExportPdf() {
+    setPdfNote(null);
+    if (!draftRef.current) return;
+    const ok = exportReportPdf(`${ticker} — Story Draft`, draftRef.current.innerHTML);
+    if (!ok) setPdfNote("Your browser blocked the popup — allow popups for this site to export.");
+  }
 
   async function run(force: boolean) {
     const id = ++runId.current;
@@ -109,7 +119,15 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
           {streaming && text === "" && (
             <p className="text-sm text-ink2">Drafting editorial pass…</p>
           )}
-          <article className="report-md">
+          {done && (
+            <div className="mb-3 flex justify-end">
+              <button onClick={handleExportPdf} className="btn btn-outline !py-1 text-xs">
+                Export PDF
+              </button>
+            </div>
+          )}
+          {pdfNote && <p className="mb-3 text-xs text-ink2">{pdfNote}</p>}
+          <article ref={draftRef} className="report-md">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
           </article>
           {streaming && text !== "" && <p className="mt-4 text-sm text-ink2">Streaming…</p>}
