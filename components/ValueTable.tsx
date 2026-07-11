@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { computeValuation } from "@/lib/finance/valuation";
 import { classifyStock, revenueCagr5y } from "@/lib/finance/assumptions";
 import { styleComposite } from "@/lib/finance/helpers";
-import { Assumptions, FinancialSnapshot, ValuationVariant } from "@/lib/finance/types";
+import { Assumptions, FinancialSnapshot, Horizon, ValuationVariant } from "@/lib/finance/types";
 import { fmtMoney } from "@/lib/format";
 import KnobField from "@/components/KnobField";
 import Term from "@/components/Term";
@@ -132,6 +132,52 @@ function VariantButton({
   );
 }
 
+const HORIZON_LABEL: Record<Horizon, string> = {
+  current: "Today",
+  nextYear: "In 1 Year",
+};
+
+const HORIZON_TOOLTIP =
+  "Rolls every model forward one fiscal year: cash flows grow one year along the assumed path, multiples apply to next year's metrics. Debt, cash and multiples held constant.";
+
+// Segmented horizon toggle — orthogonal to the variant toggle (above) and the
+// investor-style sub-tabs (below): every combination of variant x style x
+// horizon is valid, and this control's state is independent of both. Mirrors
+// VariantButton's hover-tooltip pattern/markup exactly.
+function HorizonButton({
+  horizon,
+  active,
+  align,
+  onClick,
+}: {
+  horizon: Horizon;
+  active: boolean;
+  align: "left" | "right";
+  onClick: () => void;
+}) {
+  const posClass =
+    align === "left"
+      ? "left-0 origin-top-left"
+      : "right-0 origin-top-right";
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      aria-label={HORIZON_TOOLTIP}
+      className={`group relative tab-btn !px-3 !py-1.5 !text-xs ${active ? "active" : ""}`}
+      onClick={onClick}
+    >
+      {HORIZON_LABEL[horizon]}
+      <span
+        role="tooltip"
+        className={`pointer-events-none absolute top-full z-50 mt-1.5 w-72 max-w-[calc(100vw-2rem)] scale-95 whitespace-normal break-words rounded-lg border border-line bg-card p-2.5 text-xs font-normal normal-case leading-snug tracking-normal text-ink3 opacity-0 shadow-lg transition-all duration-150 group-hover:scale-100 group-hover:opacity-100 ${posClass}`}
+      >
+        {HORIZON_TOOLTIP}
+      </span>
+    </button>
+  );
+}
+
 const LEGEND = [
   { color: "bg-green", label: "Upside" },
   { color: "bg-amber", label: "Near fair" },
@@ -230,6 +276,7 @@ export default function ValueTable({
 }) {
   const [knobs, setKnobs] = useState<KnobInputs>(EMPTY_KNOBS);
   const [activeVariant, setActiveVariant] = useState<ValuationVariant>("calibrated");
+  const [activeHorizon, setActiveHorizon] = useState<Horizon>("current");
 
   // Pure functions of the snapshot prop — computed client-side, no network
   // request. classifyStock also picks the default sub-tab (lazy initializer
@@ -256,11 +303,12 @@ export default function ValueTable({
     return o;
   }, [knobs]);
 
-  // Pure, client-side — no network request. Recomputes on every knob change
-  // AND on variant switch (computeValuation is a pure function of all three).
+  // Pure, client-side — no network request. Recomputes on every knob change,
+  // variant switch, AND horizon switch (computeValuation is a pure function
+  // of all four; the horizon toggle is independent of variant/style tab).
   const out = useMemo(
-    () => computeValuation(snapshot, overrides, activeVariant),
-    [snapshot, overrides, activeVariant]
+    () => computeValuation(snapshot, overrides, activeVariant, activeHorizon),
+    [snapshot, overrides, activeVariant, activeHorizon]
   );
 
   const price = snapshot.price;
@@ -287,11 +335,12 @@ export default function ValueTable({
   const composite = activeTab === "all" ? out.composite : styleComp.value;
   const compositeMethod = activeTab === "all" ? "trimmed" : styleComp.method;
   const compositeLabel =
-    activeTab === "all"
+    (activeTab === "all"
       ? activeVariant === "textbook"
         ? "Textbook Composite"
         : "Composite"
-      : `${TAB_LABEL[activeTab]} composite`;
+      : `${TAB_LABEL[activeTab]} composite`) +
+    (activeHorizon === "nextYear" ? " (1yr forward)" : "");
   const compositeVariant =
     activeTab === "all"
       ? "Trimmed mean"
@@ -328,24 +377,48 @@ export default function ValueTable({
           </div>
           <p className="mt-1 text-xs text-ink2">
             {VARIANT_LABEL[activeVariant]} composite
-            {compositeUpside !== null &&
+            {activeHorizon === "nextYear" ? " (1yr forward)" : ""}
+            {activeHorizon === "current" &&
+              compositeUpside !== null &&
               ` · ${compositeUpside >= 0 ? "+" : ""}${(compositeUpside * 100).toFixed(1)}% vs price`}
             {updatedDate && ` · Updated ${updatedDate}`}
           </p>
+          {activeHorizon === "nextYear" && compositeUpside !== null && (
+            <p className={`mt-0.5 text-xs font-medium ${compositeUpside >= 0 ? "text-green" : "text-red"}`}>
+              Implied 1-yr return vs today&apos;s price: {compositeUpside >= 0 ? "+" : ""}
+              {(compositeUpside * 100).toFixed(1)}%
+            </p>
+          )}
         </div>
-        <div className="flex gap-1" role="group" aria-label="Valuation methodology variant">
-          <VariantButton
-            variant="calibrated"
-            active={activeVariant === "calibrated"}
-            align="left"
-            onClick={() => setActiveVariant("calibrated")}
-          />
-          <VariantButton
-            variant="textbook"
-            active={activeVariant === "textbook"}
-            align="right"
-            onClick={() => setActiveVariant("textbook")}
-          />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex gap-1" role="group" aria-label="Valuation methodology variant">
+            <VariantButton
+              variant="calibrated"
+              active={activeVariant === "calibrated"}
+              align="left"
+              onClick={() => setActiveVariant("calibrated")}
+            />
+            <VariantButton
+              variant="textbook"
+              active={activeVariant === "textbook"}
+              align="right"
+              onClick={() => setActiveVariant("textbook")}
+            />
+          </div>
+          <div className="flex gap-1" role="group" aria-label="Valuation horizon">
+            <HorizonButton
+              horizon="current"
+              active={activeHorizon === "current"}
+              align="left"
+              onClick={() => setActiveHorizon("current")}
+            />
+            <HorizonButton
+              horizon="nextYear"
+              active={activeHorizon === "nextYear"}
+              align="right"
+              onClick={() => setActiveHorizon("nextYear")}
+            />
+          </div>
         </div>
       </div>
 
@@ -419,6 +492,8 @@ export default function ValueTable({
                 <span className="font-semibold text-accent">{compositeLabel}</span>
                 <p className="mt-0.5 max-w-xs text-xs font-normal leading-snug text-ink2">
                   {COMPOSITE_EXPLAINER}
+                  {activeHorizon === "nextYear" &&
+                    " Every method rolled forward one fiscal year, not today's value."}
                 </p>
               </td>
               <td className="px-4 py-3 text-ink2">{compositeVariant}</td>

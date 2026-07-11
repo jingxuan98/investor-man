@@ -55,6 +55,13 @@ export interface FinancialSnapshot {
 // multiples. All 10 models exist in both; only the underlying math differs.
 export type ValuationVariant = "calibrated" | "textbook";
 
+// Valuation horizon: "current" (today, the existing behavior) or "nextYear"
+// — every model re-answers "what will one share be worth ONE fiscal year
+// from now if our assumptions hold?" by advancing its own cash flow/metric
+// one year along its own growth path. See valuation.ts's `advance` and
+// `growthPath` for the shared mechanics.
+export type Horizon = "current" | "nextYear";
+
 export interface Assumptions {
   normalGrowth: number; // decimal, e.g. 0.12
   terminalGrowth: number; // decimal, default 0.03

@@ -311,3 +311,80 @@ test("calibrated variant unaffected by textbook additions (regression)", () => {
   const out = computeValuation(FIX, ZERO_G, "calibrated");
   expect(model(out, "dcf20").value!).toBeCloseTo(23.540691159275674, 6);
 });
+
+// --- nextYear horizon -------------------------------------------------------
+
+test("horizon defaults to 'current' when omitted (backward compatible)", () => {
+  const withDefault = computeValuation(FIX, ZERO_G, "calibrated");
+  const explicit = computeValuation(FIX, ZERO_G, "calibrated", "current");
+  expect(withDefault.composite).toEqual(explicit.composite);
+  expect(model(withDefault, "dcf20").value).toEqual(model(explicit, "dcf20").value);
+});
+
+test("textbook, zero growth everywhere (flat perpetuity): nextYear == current exactly for every model and the composite", () => {
+  const out = computeValuation(FIX, ZERO_G, "textbook", "current");
+  const outNext = computeValuation(FIX, ZERO_G, "textbook", "nextYear");
+  for (const key of ["dcf20", "dfcf20", "dni20", "hmodel", "evEbitda", "evRevenue", "pFcf", "revDcf", "graham"]) {
+    expect(model(outNext, key).value, key).toBeCloseTo(model(out, key).value!, 10);
+  }
+  expect(outNext.composite!).toBeCloseTo(out.composite!, 10);
+});
+
+test("multiples model (P/FCF): nextYear == current x (1 + seed growth) exactly", () => {
+  const overrides = { normalGrowth: 0.2, terminalGrowth: 0.04, wacc: 0.1, marginExpansion: 0, hHalfLife: 4 };
+  const current = computeValuation(FIX, overrides, "calibrated", "current");
+  const nextYear = computeValuation(FIX, overrides, "calibrated", "nextYear");
+  const curVal = model(current, "pFcf").value!;
+  const nextVal = model(nextYear, "pFcf").value!;
+  // P/FCF has no debt/cash offset (fair = mult * metric), so the (1+seed)
+  // scaling on the metric passes straight through to the implied price.
+  expect(nextVal).toBeCloseTo(curVal * 1.2, 10);
+});
+
+test("calibrated dcf20 nextYear: value accretes for a growing fixture, and the path-shift is exactly verifiable", () => {
+  const overrides = { normalGrowth: 0.1, terminalGrowth: 0.04, wacc: 0.1, marginExpansion: 0, hHalfLife: 4 };
+  const current = computeValuation(FIX, overrides, "calibrated", "current");
+  const nextYear = computeValuation(FIX, overrides, "calibrated", "nextYear");
+  expect(model(nextYear, "dcf20").value!).toBeGreaterThan(model(current, "dcf20").value!);
+
+  // Manually reconstruct the engine's nextYear path-shift: dcf20's base is
+  // FIX.years[0].operatingCashFlow (300, since FIX.ttm is null); the
+  // three-stage path g=10% for 5y, 0.7*g for 5y, gT=4% for 10y is advanced
+  // one year (drop year 1, append one more terminal year) and the base is
+  // rebased by the OLD path's first-year rate — exactly what
+  // valuation.ts's `advance`/discountedSeries do internally.
+  const g = 0.1;
+  const gT = 0.04;
+  const wacc = 0.1;
+  const oldPath = [
+    g, g, g, g, g,
+    0.7 * g, 0.7 * g, 0.7 * g, 0.7 * g, 0.7 * g,
+    gT, gT, gT, gT, gT, gT, gT, gT, gT, gT,
+  ];
+  const shiftedPath = [...oldPath.slice(1), gT];
+  const base1 = 300 * (1 + g);
+  let cf = base1;
+  let pv = 0;
+  shiftedPath.forEach((gr, i) => {
+    cf *= 1 + gr;
+    pv += cf / Math.pow(1 + wacc, i + 1);
+  });
+  const equity = pv + (200 - 400); // FIX cash 200, debt 400, dcf20 adjusts net debt
+  const expected = equity / 100; // FIX sharesOutstanding = 100
+  expect(model(nextYear, "dcf20").value!).toBeCloseTo(expected, 6);
+});
+
+test("composite recomputed per horizon: nextYear composite exceeds current for a growing fixture", () => {
+  const overrides = { normalGrowth: 0.1, terminalGrowth: 0.04, wacc: 0.1, marginExpansion: 0, hHalfLife: 4 };
+  const current = computeValuation(FIX, overrides, "calibrated", "current");
+  const nextYear = computeValuation(FIX, overrides, "calibrated", "nextYear");
+  expect(current.composite).not.toBeNull();
+  expect(nextYear.composite).not.toBeNull();
+  expect(nextYear.composite!).toBeGreaterThan(current.composite!);
+});
+
+test("existing current-horizon tests are unaffected (regression, ZERO_G calibrated)", () => {
+  const out = computeValuation(FIX, ZERO_G, "calibrated", "current");
+  expect(model(out, "dcf20").value!).toBeCloseTo(23.540691159275674, 6);
+  expect(model(out, "hmodel").value!).toBeCloseTo(25, 6);
+});

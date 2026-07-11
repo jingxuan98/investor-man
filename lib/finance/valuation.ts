@@ -1,6 +1,7 @@
 import {
   Assumptions,
   FinancialSnapshot,
+  Horizon,
   ModelResult,
   ValuationOutput,
   ValuationVariant,
@@ -74,6 +75,21 @@ function threeStagePath(g: number, gT: number): number[] {
   );
 }
 
+// Core loop shared by every path-driven model: grows `base` along an
+// explicit per-year growth-rate array and discounts each year's cash flow at
+// `wacc`. No terminal value — that's layered on top by callers that need one
+// (textbookPv's Gordon TV). Returns the final year's cash flow too, since the
+// Gordon TV is computed off of it and re-deriving it would re-walk the path.
+function pathPv(base: number, path: number[], wacc: number): { pv: number; finalCf: number } {
+  let cf = base;
+  let pv = 0;
+  path.forEach((g, i) => {
+    cf *= 1 + g;
+    pv += cf / Math.pow(1 + wacc, i + 1);
+  });
+  return { pv, finalCf: cf };
+}
+
 // PV of the 20-year three-stage flow series. Pure sum — no terminal value.
 // EXPORTED so insights.ts (reverse-DCF) inverts exactly what dcf20 computes,
 // instead of duplicating the projection math.
@@ -84,13 +100,7 @@ export function threeStagePv(
   terminalGrowth = 0.04
 ): number | null {
   if (wacc <= 0) return null;
-  let cf = base;
-  let pv = 0;
-  threeStagePath(g, terminalGrowth).forEach((gr, i) => {
-    cf *= 1 + gr;
-    pv += cf / Math.pow(1 + wacc, i + 1);
-  });
-  return pv;
+  return pathPv(base, threeStagePath(g, terminalGrowth), wacc).pv;
 }
 
 // Linear interpolation of the growth rate from g0 (year 1) to gT (year 20)
@@ -115,24 +125,62 @@ export function textbookPv(
   gT: number
 ): number | null {
   if (wacc <= gT) return null;
-  let cf = base;
-  let pv = 0;
-  linearFadePath(g0, gT).forEach((g, i) => {
-    cf *= 1 + g;
-    pv += cf / Math.pow(1 + wacc, i + 1);
-  });
-  const tv = (cf * (1 + gT)) / (wacc - gT);
-  pv += tv / Math.pow(1 + wacc, HORIZON);
+  const { pv, finalCf } = pathPv(base, linearFadePath(g0, gT), wacc);
+  const tv = (finalCf * (1 + gT)) / (wacc - gT);
+  return pv + tv / Math.pow(1 + wacc, HORIZON);
+}
+
+// The variant's own 20-year growth-rate path built from the resolved
+// assumptions — calibrated's three discrete stages, or textbook's linear
+// fade. Shared by every path-driven model (DCF family + Revenue DCF) so the
+// nextYear-horizon shift (`advance`, below) is written and tested once
+// instead of re-derived per model.
+function growthPath(a: Assumptions, variant: ValuationVariant): number[] {
+  return variant === "textbook"
+    ? linearFadePath(a.normalGrowth, a.terminalGrowth)
+    : threeStagePath(a.normalGrowth, a.terminalGrowth);
+}
+
+// nextYear horizon, generic path transform: the first year of the path has
+// already elapsed, so drop it and append one more year at the terminal rate
+// — the projection window stays 20 years long, just one year further out.
+// (Calibrated: years 1-5/6-10/11-20 → 1-4/5-9/10-20, i.e. one seed year
+// consumed. Textbook: the fade restarts from its old year-2 point, with one
+// extra terminal-rate year tacked on the end.) Callers pair this with
+// rebasing the cash flow itself by the path's OLD first-year rate (see
+// discountedSeries) — that rate is "the year that just elapsed."
+function advance(path: number[], terminalGrowth: number): number[] {
+  return [...path.slice(1), terminalGrowth];
+}
+
+// Discounts `base` along the variant's own growth path over a fixed 20-year
+// window; textbook layers a Gordon terminal value on the path's final cash
+// flow (same shape as textbookPv). Used by the DCF family for BOTH horizons:
+// "current" discounts the path as built; "nextYear" first rebases `base` one
+// year along the path's own first-year growth rate, then discounts the
+// shifted path (`advance`) — a generic transform, not per-model duplication.
+function discountedSeries(
+  base: number,
+  a: Assumptions,
+  variant: ValuationVariant,
+  horizon: Horizon
+): number | null {
+  const path0 = growthPath(a, variant);
+  const guardFails = variant === "textbook" ? a.wacc <= a.terminalGrowth : a.wacc <= 0;
+  if (guardFails) return null;
+
+  const base1 = horizon === "nextYear" ? base * (1 + path0[0]) : base;
+  const path = horizon === "nextYear" ? advance(path0, a.terminalGrowth) : path0;
+
+  const { pv, finalCf } = pathPv(base1, path, a.wacc);
+  if (variant === "textbook") {
+    const tv = (finalCf * (1 + a.terminalGrowth)) / (a.wacc - a.terminalGrowth);
+    return pv + tv / Math.pow(1 + a.wacc, HORIZON);
+  }
   return pv;
 }
 
-function discountedSeries(base: number, a: Assumptions, variant: ValuationVariant): number | null {
-  return variant === "textbook"
-    ? textbookPv(base, a.normalGrowth, a.wacc, a.terminalGrowth)
-    : threeStagePv(base, a.normalGrowth, a.wacc, a.terminalGrowth);
-}
-
-type Ctx = { s: FinancialSnapshot; a: Assumptions; variant: ValuationVariant };
+type Ctx = { s: FinancialSnapshot; a: Assumptions; variant: ValuationVariant; horizon: Horizon };
 
 function latest(s: FinancialSnapshot) {
   return s.years[0];
@@ -158,7 +206,7 @@ function dcfModel(
 ): { value: number | null; note?: string } {
   if (base === null) return { value: null, note: `n/a — missing ${label}` };
   if (base <= 0) return { value: null, note: `n/a — negative ${label}` };
-  const pv = discountedSeries(base, ctx.a, ctx.variant);
+  const pv = discountedSeries(base, ctx.a, ctx.variant, ctx.horizon);
   if (pv === null) return { value: null, note: ctx.variant === "textbook" ? TEXTBOOK_TERM_NOTE : TERM_NOTE };
   const y = latest(ctx.s);
   const adj = adjustNetDebt ? (y.cash ?? 0) - (y.totalDebt ?? 0) : 0;
@@ -196,12 +244,18 @@ function multipleModel(
   metric: (y: FinancialSnapshot["years"][number]) => number | null,
   label: string,
   useEV: boolean,
+  ctx: Ctx,
   // sector-median multiple takes priority when provided; own history is the fallback
   sectorMult?: number
 ): { value: number | null; note?: string; variant?: string } {
-  const m0 = metric(latest(s));
-  if (m0 === null || m0 <= 0)
+  const m0raw = metric(latest(s));
+  if (m0raw === null || m0raw <= 0)
     return { value: null, note: `n/a — missing/negative ${label}` };
+  // nextYear horizon: next year's metric = current metric x (1 + seed
+  // growth), same multiple, same equity math. Revenue has its own growth
+  // rate concept; EBITDA/FCF don't project a separate growth path in this
+  // model family, so the seed (normalGrowth) is used as a proxy for all three.
+  const m0 = ctx.horizon === "nextYear" ? m0raw * (1 + ctx.a.normalGrowth) : m0raw;
   const ownMult = sectorMult === undefined ? medianMultiple(s, metric, useEV) : null;
   const mult = sectorMult ?? ownMult;
   if (mult === null)
@@ -222,7 +276,8 @@ function multipleModel(
 export function computeValuation(
   s: FinancialSnapshot,
   overrides: Partial<Assumptions> = {},
-  variant: ValuationVariant = "calibrated"
+  variant: ValuationVariant = "calibrated",
+  horizon: Horizon = "current"
 ): ValuationOutput {
   const a = resolveAssumptions(s, overrides, variant);
 
@@ -270,7 +325,7 @@ export function computeValuation(
     r: { value: number | null; note?: string }
   ) => models.push({ key, name, variant: modelVariant, ...r });
 
-  const ctx: Ctx = { s, a, variant };
+  const ctx: Ctx = { s, a, variant, horizon };
 
   // TTM bases preferred (reference architecture) for calibrated; textbook
   // uses audited latest-fiscal-year statements only — "textbook analysts use
@@ -283,7 +338,9 @@ export function computeValuation(
   add("dfcf20", "DFCF-20", "20Y · Free CF", dcfModel(fcfBase, "free cash flow", ctx, true));
   add("dni20", "DNI-20", "20Y · Net Income", dcfModel(niBase, "net income", ctx, false));
 
-  // H-model: V = FCF0 * [(1+gT) + H*(g0-gT)] / (wacc - gT), on TTM FCF
+  // H-model: V = FCF0 * [(1+gT) + H*(g0-gT)] / (wacc - gT), on TTM FCF.
+  // nextYear horizon: FCF0 becomes one year older (FCF0 * (1 + seed growth))
+  // — the starting point of the same fade formula, unchanged otherwise.
   {
     const fcf = fcfBase;
     if (fcf === null || fcf <= 0)
@@ -291,8 +348,9 @@ export function computeValuation(
     else if (a.wacc <= a.terminalGrowth)
       add("hmodel", "H-Model DCF", "Intrinsic", { value: null, note: TERM_NOTE });
     else {
+      const fcf1 = horizon === "nextYear" ? fcf * (1 + a.normalGrowth) : fcf;
       const v =
-        (fcf * (1 + a.terminalGrowth + a.hHalfLife * (a.normalGrowth - a.terminalGrowth))) /
+        (fcf1 * (1 + a.terminalGrowth + a.hHalfLife * (a.normalGrowth - a.terminalGrowth))) /
         (a.wacc - a.terminalGrowth);
       // Reason: a steep assumed decline (large negative normalGrowth) can drive
       // the H-model numerator negative — mirror dcfModel's guard so we never emit
@@ -313,15 +371,15 @@ export function computeValuation(
   // only, so leave `multiples` empty and let multipleModel fall through.
   const multiples = variant === "textbook" ? {} : resolveMultiples(s);
   {
-    const r = multipleModel(s, (yy) => yy.ebitda, "EBITDA", true);
+    const r = multipleModel(s, (yy) => yy.ebitda, "EBITDA", true, ctx);
     add("evEbitda", "EV / EBITDA", r.variant ?? "Multiples", r);
   }
   {
-    const r = multipleModel(s, (yy) => yy.revenue, "revenue", true, multiples.evRev);
+    const r = multipleModel(s, (yy) => yy.revenue, "revenue", true, ctx, multiples.evRev);
     add("evRevenue", "EV / Revenue", r.variant ?? "Multiples", r);
   }
   {
-    const r = multipleModel(s, (yy) => yy.freeCashFlow, "free cash flow", false, multiples.pFcf);
+    const r = multipleModel(s, (yy) => yy.freeCashFlow, "free cash flow", false, ctx, multiples.pFcf);
     add("pFcf", "P / FCF", r.variant ?? "Multiples", r);
   }
 
@@ -342,11 +400,14 @@ export function computeValuation(
       add("revDcf", "Revenue DCF", "Growth", { value: null, note: "n/a — WACC must be positive" });
     else {
       const m0 = ni / rev;
-      const path =
-        variant === "textbook"
-          ? linearFadePath(a.normalGrowth, a.terminalGrowth)
-          : threeStagePath(a.normalGrowth, a.terminalGrowth);
-      let r = rev;
+      const path0 = growthPath(a, variant);
+      // nextYear horizon: revenue advances one year along the path's own
+      // first-year growth rate, and the path itself shifts left one year
+      // (same generic `advance` transform the DCF family uses) — see
+      // discountedSeries above for the shared mechanics.
+      const rev1 = horizon === "nextYear" ? rev * (1 + path0[0]) : rev;
+      const path = horizon === "nextYear" ? advance(path0, a.terminalGrowth) : path0;
+      let r = rev1;
       let pv = 0;
       let niT = 0;
       path.forEach((g, i) => {
@@ -379,7 +440,10 @@ export function computeValuation(
       add("peg", "PEG-implied", "Growth", { value: null, note: "n/a — no growth" });
     else {
       const g100 = variant === "textbook" ? gRaw * 100 : clamp(gRaw * 100, 0, 100);
-      add("peg", "PEG-implied", "Growth", { value: eps * g100 });
+      // nextYear horizon: EPS advances one year along the PEG growth rate;
+      // the fair P/E (= g100, PEG of 1) is unchanged.
+      const eps1 = horizon === "nextYear" ? eps * (1 + gRaw) : eps;
+      add("peg", "PEG-implied", "Growth", { value: eps1 * g100 });
     }
   }
 
@@ -394,8 +458,11 @@ export function computeValuation(
     else {
       const g100 = variant === "textbook" ? a.normalGrowth * 100 : clamp(a.normalGrowth * 100, 0, 30);
       const Y = 5.0;
+      // nextYear horizon: EPS advances one year along the growth seed; same
+      // Graham formula otherwise.
+      const eps1 = horizon === "nextYear" ? eps * (1 + a.normalGrowth) : eps;
       add("graham", "Graham Revised", "EPS × growth", {
-        value: (eps * (8.5 + 2 * g100) * 4.4) / Y,
+        value: (eps1 * (8.5 + 2 * g100) * 4.4) / Y,
       });
     }
   }
