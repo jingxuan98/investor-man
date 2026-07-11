@@ -1,0 +1,319 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Design tokens (reference-matched palette). Flat, bordered, light-only.
+   Source: design-spec extracted from the reference site's computed styles.
+--------------------------------------------------------------------------- */
+:root {
+  /* Light-only design (reference has no dark variant): pin native form
+     controls/scrollbars to light UA rendering even under OS dark mode. */
+  color-scheme: light;
+
+  --background: #fbfbfa; /* page bg */
+  --foreground: #1a1a18; /* text primary */
+
+  --color-page: #fbfbfa;
+  --color-card: #ffffff;
+  --color-line: #eceae6;
+  --color-ink: #1a1a18; /* primary text */
+  --color-ink2: #8a887f; /* secondary/meta text */
+  --color-ink3: #44443f; /* tertiary/body text */
+
+  --color-accent: #2c5e8a;
+  --color-accent-tint: #eef3f8;
+
+  --color-green: #2e7d55;
+  --color-green-tint: #eff6f1;
+  --color-red: #b23b3b;
+  --color-red-tint: #fbf1f0;
+  --color-amber: #a3721f;
+  --color-amber-tint: #fbf5e9;
+
+  --color-track: #f6f6f5; /* neutral bar-track / toggle-inactive bg */
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-page: var(--color-page);
+  --color-card: var(--color-card);
+  --color-line: var(--color-line);
+  --color-ink: var(--color-ink);
+  --color-ink2: var(--color-ink2);
+  --color-ink3: var(--color-ink3);
+
+  --color-accent: var(--color-accent);
+  --color-accent-tint: var(--color-accent-tint);
+  --color-green: var(--color-green);
+  --color-green-tint: var(--color-green-tint);
+  --color-red: var(--color-red);
+  --color-red-tint: var(--color-red-tint);
+  --color-amber: var(--color-amber);
+  --color-amber-tint: var(--color-amber-tint);
+  --color-track: var(--color-track);
+
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--color-page);
+  color: var(--color-ink);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Giant/emphasized numerals + short all-caps status words — Geist Mono,
+   tabular. Applied selectively (hero stats, KPI values, gate grade/score,
+   quality composite + tier words), never on body text or table rows. */
+.num {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Base flat bordered card used everywhere — no shadow. */
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+}
+
+/* Tab bar pills (main section nav). */
+.tab-btn {
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-ink2);
+  border: 1px solid transparent;
+  background: transparent;
+  white-space: nowrap;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+.tab-btn.active {
+  background: #e4eef6;
+  color: var(--color-ink);
+  border-color: #92b5d3;
+  font-weight: 600;
+}
+.tab-btn:hover:not(.active) {
+  background: var(--color-track);
+}
+
+/* Chips / tags / badges — tinted bg + colored text, never saturated. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  line-height: 1.4;
+}
+.chip-pos { background: var(--color-green-tint); color: var(--color-green); }
+.chip-neg { background: var(--color-red-tint); color: var(--color-red); }
+.chip-warn { background: var(--color-amber-tint); color: var(--color-amber); }
+.chip-neutral { background: var(--color-track); color: var(--color-ink2); }
+.chip-accent { background: var(--color-accent-tint); color: var(--color-accent); }
+
+/* Investor-style badges (growth/balanced/mature) — stock header, next to the
+   sector badge. Exact hex per design spec (mature's tint is deliberately not
+   --color-accent-tint: it's a slightly darker blue tuned for this chip). */
+.style-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 10px;
+  line-height: 1.4;
+}
+.style-badge-growth { background: #EFF6F1; color: #2E7D55; }
+.style-badge-balanced { background: #FBF5E9; color: #A3721F; }
+.style-badge-mature { background: #E4EEF6; color: #2C5E8A; }
+
+/* Plain outline badge (ticker/sector pills). */
+.badge-outline {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--color-line);
+  background: var(--color-card);
+  color: var(--color-ink2);
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 16px;
+  transition: background-color 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-blue {
+  background: var(--color-accent);
+  color: #fbfbfa;
+  border: 1px solid var(--color-accent);
+}
+.btn-blue:hover:not(:disabled) { background: #244d72; }
+.btn-outline {
+  background: var(--color-card);
+  color: var(--color-ink3);
+  border: 1px solid var(--color-line);
+}
+.btn-outline:hover:not(:disabled) { background: var(--color-track); }
+
+/* KPI cell (Overview stat ribbon / IV KPI row / Story header strip). */
+.kpi-cell {
+  padding: 20px 24px;
+  border-color: var(--color-line);
+}
+.kpi-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-ink2);
+}
+.kpi-value {
+  margin-top: 4px;
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+/* Bullet-chart track (Intrinsic Value ladder rows) — thin track, value fill,
+   market-price tick. Slimmer than a default progress bar. */
+.iv-track {
+  position: relative;
+  height: 6px;
+  width: 100%;
+  border-radius: 3px;
+  background: var(--color-track);
+}
+.iv-fill {
+  height: 6px;
+  border-radius: 3px;
+}
+.iv-tick {
+  position: absolute;
+  top: -3px;
+  height: 12px;
+  width: 2px;
+  background: var(--color-ink2);
+}
+
+/* Thin per-dimension progress bar (quality profile grid). */
+.dim-track {
+  height: 4px;
+  width: 100%;
+  border-radius: 2px;
+  background: var(--color-track);
+}
+.dim-fill {
+  height: 4px;
+  border-radius: 2px;
+  /* Color comes from a bg-* utility class in markup (green/amber/red tier) —
+     no default background here, since plain custom-CSS rules sit outside
+     Tailwind's utility layer and would otherwise always beat bg-* utilities
+     regardless of source order. */
+}
+
+/* Editable numeric knob inputs (assumptions strips). */
+.knob-input {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--color-line);
+  background: var(--color-card);
+  padding: 6px 8px;
+  font-size: 13px;
+  color: var(--color-ink);
+}
+.knob-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+.knob-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-ink2);
+}
+
+/* Styling for streamed AI markdown reports (react-markdown output). */
+.report-md {
+  font-size: 0.925rem;
+  line-height: 1.65;
+  color: var(--color-ink3);
+}
+.report-md h1,
+.report-md h2,
+.report-md h3 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 1.25rem 0 0.6rem;
+  color: var(--color-ink);
+}
+.report-md h1 { font-size: 1.35rem; }
+.report-md h2 { font-size: 1.15rem; }
+.report-md h3 { font-size: 1rem; }
+.report-md h1:first-child,
+.report-md h2:first-child,
+.report-md h3:first-child { margin-top: 0; }
+.report-md p { margin: 0.6rem 0; }
+.report-md ul,
+.report-md ol { margin: 0.6rem 0; padding-left: 1.4rem; }
+.report-md ul { list-style: disc; }
+.report-md ol { list-style: decimal; }
+.report-md li { margin: 0.2rem 0; }
+.report-md strong { font-weight: 600; }
+.report-md a { color: var(--color-accent); text-decoration: underline; }
+.report-md code {
+  background: var(--color-track);
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.25rem;
+  font-size: 0.85em;
+}
+.report-md pre {
+  background: var(--color-track);
+  padding: 0.75rem;
+  border-radius: 0.4rem;
+  overflow-x: auto;
+}
+.report-md pre code { background: none; padding: 0; }
+.report-md blockquote {
+  border-left: 3px solid var(--color-line);
+  padding-left: 0.8rem;
+  color: var(--color-ink2);
+  margin: 0.6rem 0;
+}
+.report-md table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0;
+  font-size: 0.85rem;
+  display: block;
+  overflow-x: auto;
+}
+.report-md th,
+.report-md td {
+  border: 1px solid var(--color-line);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+}
+.report-md th { background: var(--color-page); font-weight: 600; }
+.report-md hr {
+  border: none;
+  border-top: 1px solid var(--color-line);
+  margin: 1.2rem 0;
+}
