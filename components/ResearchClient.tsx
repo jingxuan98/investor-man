@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { normalizeMarkdownTables } from "@/lib/markdownTables";
 import { geminiHeaders, GEMINI_KEY_STORAGE_KEY } from "@/lib/geminiKeyHeader";
 import { exportReportPdf } from "@/lib/exportPdf";
 import { formatModelCaption } from "@/lib/modelCaption";
@@ -270,7 +271,9 @@ export default function ResearchClient({
           )}
           {pdfNote && <p className="mb-3 text-xs text-ink2">{pdfNote}</p>}
           <article ref={reportRef} className="report-md">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {normalizeMarkdownTables(text)}
+            </ReactMarkdown>
           </article>
           {streaming && text !== "" && <p className="mt-4 text-sm text-ink2">Streaming…</p>}
           {done && (
