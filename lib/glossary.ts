@@ -23,7 +23,7 @@ export const glossary: Record<string, string> = {
   pe:
     "Price/Earnings — the stock price divided by annual profit per share. Roughly, how many years of today's profit you're paying for one share.",
   peg:
-    "PEG ratio — the P/E divided by the growth rate. A PEG near 1 suggests the price is roughly fair for how fast the company is growing; well above 1 suggests you're paying up for that growth.",
+    "P/E ÷ expected growth. Peter Lynch's rule of thumb: fair value at PEG ≈ 1.",
   beta:
     "Beta — how much a stock swings compared to the overall market. A beta of 1.5 means it tends to move about 50% more than the market, up or down.",
   grossMargin:

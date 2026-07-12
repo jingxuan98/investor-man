@@ -4,10 +4,11 @@ import {
   generalThreeStagePv,
   multiplesComparison,
   ownerYield,
+  pegMultipleRow,
   reverseDcf,
 } from "@/lib/finance/insights";
-import { threeStagePv, medianMultiple } from "@/lib/finance/valuation";
-import { autoWacc } from "@/lib/finance/assumptions";
+import { threeStagePv, medianMultiple, pegRatio } from "@/lib/finance/valuation";
+import { autoWacc, pegGrowth } from "@/lib/finance/assumptions";
 import { FIX } from "./fixture";
 
 // ---------------------------------------------------------------------------
@@ -243,4 +244,90 @@ test("multiplesComparison: metric fully missing -> that row's dependent fields n
 
   // other rows unaffected
   expect(row(rows, "pe").current).not.toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// pegMultipleRow
+// ---------------------------------------------------------------------------
+
+test("pegMultipleRow: FIX with sector Technology -> all fields non-null and numerically correct", () => {
+  const tech = structuredClone(FIX);
+  tech.sector = "Technology"; // sector pe = 28
+
+  const g = pegGrowth(tech)!;
+  expect(g).toBeCloseTo(0.1, 6); // FIX's built-in 10% CAGR (revenue & NI scale by the same factor)
+
+  const expectedCurrent = pegRatio(tech)!;
+  expect(expectedCurrent).toBeCloseTo(2.0, 6); // P/E 20 / (100*0.10) = 2.0
+
+  const expectedFairImpliedPrice = tech.trailingEPS! * (100 * g);
+  expect(expectedFairImpliedPrice).toBeCloseTo(20, 6); // EPS 2 * fair P/E 10
+
+  const expectedSectorImpliedPeg = 28 / (100 * g);
+  expect(expectedSectorImpliedPeg).toBeCloseTo(2.8, 6);
+
+  const expectedPremium = (expectedCurrent / expectedSectorImpliedPeg - 1) * 100;
+
+  const out = pegMultipleRow(tech);
+  expect(out.current).not.toBeNull();
+  expect(out.current!).toBeCloseTo(expectedCurrent, 6);
+  expect(out.fairImpliedPrice).not.toBeNull();
+  expect(out.fairImpliedPrice!).toBeCloseTo(expectedFairImpliedPrice, 6);
+  expect(out.sectorImpliedPeg).not.toBeNull();
+  expect(out.sectorImpliedPeg!).toBeCloseTo(expectedSectorImpliedPeg, 6);
+  expect(out.premiumToSectorPct).not.toBeNull();
+  expect(out.premiumToSectorPct!).toBeCloseTo(expectedPremium, 6);
+});
+
+test("pegMultipleRow: EPS <= 0 -> current and fairImpliedPrice both null", () => {
+  const bad = structuredClone(FIX);
+  bad.sector = "Technology";
+  bad.trailingEPS = 0;
+  const out = pegMultipleRow(bad);
+  // pegRatio itself guards on trailingPE, which requires EPS > 0.
+  expect(pegRatio(bad)).toBeNull();
+  expect(out.current).toBeNull();
+  expect(out.fairImpliedPrice).toBeNull();
+
+  const negative = structuredClone(FIX);
+  negative.sector = "Technology";
+  negative.trailingEPS = -5;
+  const out2 = pegMultipleRow(negative);
+  expect(pegRatio(negative)).toBeNull();
+  expect(out2.current).toBeNull();
+  expect(out2.fairImpliedPrice).toBeNull();
+});
+
+test("pegMultipleRow: growth <= 0 -> fairImpliedPrice and sectorImpliedPeg both null", () => {
+  const bad = structuredClone(FIX);
+  bad.sector = "Technology";
+  // Reverse the years' revenue/netIncome factors so the series DECLINES
+  // going into the present (oldest->newest), giving a negative CAGR — the
+  // mirror image of FIX's built-in +10% growth history.
+  const n = bad.years.length;
+  bad.years = bad.years.map((y, i) => ({
+    ...y,
+    revenue: FIX.years[n - 1 - i].revenue,
+    netIncome: FIX.years[n - 1 - i].netIncome,
+  }));
+
+  const g = pegGrowth(bad);
+  expect(g).not.toBeNull();
+  expect(g!).toBeLessThan(0);
+
+  const out = pegMultipleRow(bad);
+  expect(out.fairImpliedPrice).toBeNull();
+  expect(out.sectorImpliedPeg).toBeNull();
+  // pegRatio also null-guards on growth <= 0, so current is null too here.
+  expect(out.current).toBeNull();
+});
+
+test("pegMultipleRow: no sector -> sectorImpliedPeg/premiumToSectorPct null, current still populated", () => {
+  const out = pegMultipleRow(FIX); // FIX.sector = null
+  expect(out.sectorImpliedPeg).toBeNull();
+  expect(out.premiumToSectorPct).toBeNull();
+  expect(out.current).not.toBeNull();
+  expect(out.current!).toBeCloseTo(2.0, 6);
+  expect(out.fairImpliedPrice).not.toBeNull();
+  expect(out.fairImpliedPrice!).toBeCloseTo(20, 6);
 });

@@ -1,6 +1,6 @@
 import { FinancialSnapshot, YearData } from "./types";
-import { autoWacc } from "./assumptions";
-import { threeStagePv, medianMultiple, resolveMultiples } from "./valuation";
+import { autoWacc, pegGrowth } from "./assumptions";
+import { threeStagePv, medianMultiple, resolveMultiples, pegRatio } from "./valuation";
 import { clamp } from "./helpers";
 
 export interface ReverseDcf {
@@ -290,4 +290,36 @@ export function multiplesComparison(s: FinancialSnapshot): MultipleRow[] {
       premiumToSectorPct,
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// PEG mini-table — a second row alongside the 4-multiples comparison.
+// current = trailing PEG (reuses pegRatio, already null-guards EPS<=0 and
+// growth<=0/null); fairImpliedPrice = the price at which PEG would sit at
+// 1.0 (Peter Lynch's fair-value rule); sectorImpliedPeg = what the stock's
+// PEG would be if it traded at the sector's median P/E (same sector-P/E
+// source multiplesComparison's P/E row uses, via resolveMultiples, so the
+// two P/E figures on the page never disagree).
+// ---------------------------------------------------------------------------
+export interface PegRow {
+  current: number | null; // pegRatio(s) — current trailing PEG
+  fairImpliedPrice: number | null; // price at which PEG would = 1.0 (Lynch rule)
+  sectorImpliedPeg: number | null; // sector median P/E ÷ (100 × pegGrowth)
+  premiumToSectorPct: number | null; // (current / sectorImpliedPeg - 1) * 100
+}
+
+export function pegMultipleRow(s: FinancialSnapshot): PegRow {
+  const current = pegRatio(s);
+  const g = pegGrowth(s);
+  const fairImpliedPrice =
+    s.trailingEPS !== null && s.trailingEPS > 0 && g !== null && g > 0
+      ? s.trailingEPS * (100 * g)
+      : null;
+  const sectorPe = resolveMultiples(s).pe ?? null;
+  const sectorImpliedPeg = sectorPe !== null && g !== null && g > 0 ? sectorPe / (100 * g) : null;
+  const premiumToSectorPct =
+    current !== null && sectorImpliedPeg !== null && sectorImpliedPeg !== 0
+      ? (current / sectorImpliedPeg - 1) * 100
+      : null;
+  return { current, fairImpliedPrice, sectorImpliedPeg, premiumToSectorPct };
 }
