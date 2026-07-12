@@ -114,7 +114,7 @@ export default function InsightPeerPanel({
         Peer comparison unavailable
         {noApiKey &&
           " — click the key icon in the header to add your free Gemini API key (aistudio.google.com/apikey)."}
-        {transient && " — the AI model is rate-limited or temporarily unavailable, try again shortly."}
+        {transient && " — try again shortly."}
       </p>
     );
   }

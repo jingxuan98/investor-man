@@ -289,6 +289,69 @@ export async function searchTickers(q: string): Promise<SearchResult[]> {
     }));
 }
 
+export interface SimilarTicker {
+  ticker: string;
+  name: string;
+}
+
+// Free "similar stocks" source for the competitors feature (see
+// app/api/competitors/[ticker]/route.ts) — Gemini is now only a fallback when
+// this throws or returns empty. recommendationsBySymbol gives algorithmic
+// similarity (sector/price-movement/market-cap based) rather than an LLM's
+// judgment, so results can differ from what Gemini used to return, but need
+// no API key and are effectively free/instant.
+export async function similarTickers(ticker: string): Promise<SimilarTicker[]> {
+  const T = ticker.toUpperCase();
+  let rec: any;
+  try {
+    // v3 validates against a schema and throws on shape drift; disable like
+    // the other calls in this file so a partial/renamed payload degrades
+    // gracefully instead of throwing.
+    rec = await yf.recommendationsBySymbol(T, {}, { validateResult: false });
+  } catch {
+    return [];
+  }
+  const symbols = Array.isArray(rec?.recommendedSymbols)
+    ? [
+        ...new Set(
+          rec.recommendedSymbols
+            .filter((r: any) => typeof r?.symbol === "string")
+            .map((r: any) => r.symbol.toUpperCase())
+        ),
+      ].filter((s): s is string => s !== T)
+    : [];
+  if (!symbols.length) return [];
+  const top5 = symbols.slice(0, 5);
+
+  // Batched quote() call for display names (one request for all 5) — cheap.
+  // Best-effort only: a missing/failed quote just falls back to the ticker
+  // string as its own name rather than dropping the candidate.
+  const quoteBySymbol = new Map<string, any>();
+  try {
+    const q: any = await yf.quote(top5, {}, { validateResult: false });
+    for (const item of Array.isArray(q) ? q : [q]) {
+      if (typeof item?.symbol === "string") quoteBySymbol.set(item.symbol.toUpperCase(), item);
+    }
+  } catch {
+    /* names fall back to ticker strings below */
+  }
+
+  return top5
+    .filter((sym) => {
+      const q = quoteBySymbol.get(sym);
+      // Drop only when we KNOW it's non-equity junk (indices, futures, FX,
+      // crypto, etc.) — an unknown/missing quoteType (quote() failed for
+      // this symbol) is kept rather than dropped.
+      return !q?.quoteType || q.quoteType === "EQUITY" || q.quoteType === "ETF";
+    })
+    .map((sym) => {
+      const q = quoteBySymbol.get(sym);
+      const name =
+        typeof q?.longName === "string" ? q.longName : typeof q?.shortName === "string" ? q.shortName : sym;
+      return { ticker: sym, name };
+    });
+}
+
 export async function fetchSnapshot(ticker: string): Promise<FinancialSnapshot> {
   let qs: any;
   try {
