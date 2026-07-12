@@ -26,6 +26,14 @@ export default async function ResearchPage({
   // browser key is present, and shows its own inline hint banner when
   // neither source has a key.
   return (
-    <ResearchClient ticker={snapshot.ticker} hasServerKey={Boolean(process.env.GEMINI_API_KEY)} />
+    <ResearchClient
+      ticker={snapshot.ticker}
+      hasServerKey={Boolean(process.env.GEMINI_API_KEY)}
+      // "playbook" now lives on its own tab (app/stock/[ticker]/playbook) —
+      // list the other types explicitly rather than relying on ResearchClient's
+      // default (all REPORTS types) so this grid doesn't grow the Playbook
+      // button back in if that default ever changes.
+      types={["research", "model3", "bear", "bull", "risks", "deepdive"]}
+    />
   );
 }

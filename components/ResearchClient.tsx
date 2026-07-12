@@ -62,9 +62,15 @@ const NO_KEY_HINT =
 export default function ResearchClient({
   ticker,
   hasServerKey,
+  types,
 }: {
   ticker: string;
   hasServerKey: boolean;
+  // Filters which report buttons render — defaults to every type in REPORTS
+  // (the full grid, used by the AI Insights tab). The AI Playbook tab passes
+  // types={["playbook"]} to render just that one report, hero-style (see the
+  // single-item branch below) rather than forking this component.
+  types?: ReportType[];
 }) {
   const [active, setActive] = useState<ReportType | null>(null);
   const [text, setText] = useState("");
@@ -97,6 +103,9 @@ export default function ResearchClient({
   useEffect(() => {
     setHasBrowserKey(!!window.localStorage.getItem(GEMINI_KEY_STORAGE_KEY));
   }, []);
+
+  const items = types ? REPORTS.filter((r) => types.includes(r.type)) : REPORTS;
+  const isHero = items.length === 1;
 
   function handleExportPdf() {
     setPdfNote(null);
@@ -207,23 +216,36 @@ export default function ResearchClient({
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {REPORTS.map((r) => (
-          <button
-            key={r.type}
-            onClick={() => run(r.type, false)}
-            disabled={streaming}
-            className={`rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${
-              active === r.type
-                ? "border-accent bg-accent-tint"
-                : "border-line bg-card hover:bg-track"
-            }`}
-          >
-            <div className="font-semibold text-ink">{r.label}</div>
-            <div className="mt-1 text-sm text-ink2">{r.desc}</div>
-          </button>
-        ))}
-      </div>
+      {isHero ? (
+        // Single-type mode (e.g. the AI Playbook tab): one prominent hero
+        // action instead of the multi-report grid — same run()/streaming
+        // behavior underneath, just a different entry point.
+        <button
+          onClick={() => run(items[0].type, false)}
+          disabled={streaming}
+          className="btn btn-blue w-full !py-4 text-base disabled:cursor-not-allowed"
+        >
+          {streaming ? "Generating…" : `Generate ${items[0].label}`}
+        </button>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {items.map((r) => (
+            <button
+              key={r.type}
+              onClick={() => run(r.type, false)}
+              disabled={streaming}
+              className={`rounded-lg border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                active === r.type
+                  ? "border-accent bg-accent-tint"
+                  : "border-line bg-card hover:bg-track"
+              }`}
+            >
+              <div className="font-semibold text-ink">{r.label}</div>
+              <div className="mt-1 text-sm text-ink2">{r.desc}</div>
+            </button>
+          ))}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-red bg-red-tint p-4 text-sm text-red">

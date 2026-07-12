@@ -48,6 +48,7 @@ export default async function StockLayout({
     ["SuperInvestor", `/stock/${s.ticker}/insight`],
     ["The Story", `/stock/${s.ticker}/story`],
     ["AI Insights", `/stock/${s.ticker}/research`],
+    ["AI Playbook", `/stock/${s.ticker}/playbook`],
   ] as const;
   return (
     <VariantProvider>
