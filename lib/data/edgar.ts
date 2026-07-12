@@ -70,6 +70,10 @@ export function extractGrowthHistory(companyFactsJson: unknown): GrowthYear[] {
 
   const revenueTags = [
     "RevenueFromContractWithCustomerExcludingAssessedTax",
+    // RMBS-style filers tag top-line tax-inclusive ("Including", not the
+    // usual "Excluding") — without this the whole EDGAR history reads null
+    // and the growth seed silently falls back to Yahoo's shorter window.
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
     "Revenues",
     // XOM-style filers tag top-line under this plural ASC-606 variant
     "RevenuesFromContractsWithCustomers",

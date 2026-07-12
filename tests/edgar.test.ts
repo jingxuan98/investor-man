@@ -120,3 +120,25 @@ test("extractGrowthHistory: per-year merge stitches partially-overlapping tags",
   // netIncome null where NetIncomeLoss has no annual entry.
   expect(out.find((r) => r.year === 2019)!.netIncome).toBeNull();
 });
+
+test("extractGrowthHistory: RMBS-style tax-INCLUSIVE revenue tag is recognized", () => {
+  // Rambus tags its top line RevenueFromContractWithCustomerIncludingAssessedTax;
+  // before this tag was in the list, its whole revenue history read null and the
+  // growth seed silently fell back to Yahoo's shorter window (task-42 analysis).
+  const rmbsStyle = {
+    facts: {
+      "us-gaap": {
+        RevenueFromContractWithCustomerIncludingAssessedTax: {
+          units: { USD: [e(2021, 328), e(2022, 455), e(2023, 461), e(2024, 557), e(2025, 632)] },
+        },
+        NetIncomeLoss: {
+          units: { USD: [e(2021, 18), e(2022, -14), e(2023, 334), e(2024, 180), e(2025, 220)] },
+        },
+      },
+    },
+  };
+  const out = extractGrowthHistory(rmbsStyle);
+  expect(out.map((r) => r.year)).toEqual([2025, 2024, 2023, 2022, 2021]);
+  expect(out.every((r) => r.revenue !== null)).toBe(true);
+  expect(out[0].revenue).toBe(632);
+});
