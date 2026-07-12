@@ -10,8 +10,12 @@ export function modelChain(): string[] {
   // no env vars and runs on this default; it briefly shipped as 2.5-flash and
   // silently served an older model than intended (caught via the model badge).
   const primary = process.env.GEMINI_MODEL ?? "gemini-3.5-flash";
+  // 2.5-flash sits before gemma: it's an older model but a full gemini —
+  // supports live-search grounding (gemma doesn't) and has its own separate
+  // free daily quota, so grounded reports degrade to it before losing search.
   const fallbacks = (
-    process.env.GEMINI_FALLBACK_MODELS ?? "gemini-3.1-flash-lite,gemma-4-31b-it"
+    process.env.GEMINI_FALLBACK_MODELS ??
+    "gemini-3.1-flash-lite,gemini-2.5-flash,gemma-4-31b-it"
   )
     .split(",")
     .map((s) => s.trim())

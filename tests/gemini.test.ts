@@ -69,6 +69,9 @@ test("modelChain: defaults apply when env vars are unset", () => {
   expect(modelChain()).toEqual([
     "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
+    // grounded-capable 2.5-flash before gemma: grounded reports keep live
+    // search (and a separate free quota) as long as possible
+    "gemini-2.5-flash",
     "gemma-4-31b-it",
   ]);
 });
