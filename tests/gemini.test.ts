@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { geminiJSON, modelChain, parseCompetitors } from "@/lib/ai/gemini";
+import {
+  clearGeminiModelCooldowns,
+  geminiJSON,
+  GEMINI_REQUEST_BUDGET_MS,
+  modelChain,
+  parseCompetitors,
+} from "@/lib/ai/gemini";
 
 test("parseCompetitors validates, uppercases, dedupes, caps at 5", () => {
   const raw = [
@@ -32,6 +38,10 @@ let savedFallbacks: string | undefined;
 beforeEach(() => {
   savedModel = process.env.GEMINI_MODEL;
   savedFallbacks = process.env.GEMINI_FALLBACK_MODELS;
+  // The 429 cooldown map is module-level (deliberately, for warm serverless
+  // instances) — clear it so one test's learned cooldowns can't leak into
+  // another's sprint pass.
+  clearGeminiModelCooldowns();
 });
 
 afterEach(() => {
@@ -154,91 +164,160 @@ function serverErrorResponse(status: number): Response {
   } as unknown as Response;
 }
 
-test("geminiJSON: 429 with a RetryInfo delay retries the SAME model after waiting, then succeeds", async () => {
-  vi.useFakeTimers();
-  process.env.GEMINI_MODEL = "gemini-3.5-flash";
-  process.env.GEMINI_FALLBACK_MODELS = "gemini-3.1-flash-lite";
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce(rateLimitedResponse("3s"))
-    .mockResolvedValueOnce(
-      fakeGeminiResponse(JSON.stringify([{ ticker: "MSFT", name: "Microsoft" }]))
-    );
-  vi.stubGlobal("fetch", fetchMock);
-  try {
-    const promise = geminiJSON<{ ticker: string; name: string }[]>("prompt", "fake-key");
-    await vi.advanceTimersByTimeAsync(3000);
-    const result = await promise;
-    expect(result).toEqual([{ ticker: "MSFT", name: "Microsoft" }]);
-    // Both calls hit the SAME (primary) model — no fallback needed.
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
-    expect(urls[0]).toContain("gemini-3.5-flash");
-    expect(urls[1]).toContain("gemini-3.5-flash");
-    expect(urls.some((u) => u.includes("gemini-3.1-flash-lite"))).toBe(false);
-  } finally {
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-  }
-});
-
-test("geminiJSON: chain order preserved across fallbacks under the new retry pacing (500/503 + a 2s inter-model gap)", async () => {
+test("geminiJSON: sprint pass — a 429 falls straight to the next model (1s courtesy gap, no patient same-model wait)", async () => {
   vi.useFakeTimers();
   process.env.GEMINI_MODEL = "m1";
-  process.env.GEMINI_FALLBACK_MODELS = "m2,m3";
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce(serverErrorResponse(500)) // m1 attempt 1
-    .mockResolvedValueOnce(serverErrorResponse(500)) // m1 attempt 2 (same-model retry) → give up
-    .mockResolvedValueOnce(serverErrorResponse(503)) // m2 attempt 1
-    .mockResolvedValueOnce(serverErrorResponse(503)) // m2 attempt 2 (same-model retry) → give up
-    .mockResolvedValueOnce(fakeGeminiResponse(JSON.stringify([{ ticker: "AAA", name: "A" }]))); // m3 succeeds
+  process.env.GEMINI_FALLBACK_MODELS = "m2";
+  const callTimes: number[] = [];
+  const fetchMock = vi.fn().mockImplementation(async (url: unknown) => {
+    callTimes.push(Date.now());
+    // m1's 30s hint must NOT be waited on in pass 1 — that's the whole point
+    // of sprinting: the primary's quota is usually the exhausted one.
+    return String(url).includes("/m1:")
+      ? rateLimitedResponse("30s")
+      : fakeGeminiResponse(JSON.stringify([{ ticker: "MSFT", name: "Microsoft" }]));
+  });
   vi.stubGlobal("fetch", fetchMock);
   try {
     const promise = geminiJSON<{ ticker: string; name: string }[]>("prompt", "fake-key");
     await vi.runAllTimersAsync();
-    const result = await promise;
-    expect(result).toEqual([{ ticker: "AAA", name: "A" }]);
-    expect(fetchMock).toHaveBeenCalledTimes(5);
-    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
-    expect(urls[0]).toContain("/m1:");
-    expect(urls[1]).toContain("/m1:");
-    expect(urls[2]).toContain("/m2:");
-    expect(urls[3]).toContain("/m2:");
-    expect(urls[4]).toContain("/m3:");
+    expect(await promise).toEqual([{ ticker: "MSFT", name: "Microsoft" }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/m1:");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/m2:");
+    // Only the 1s courtesy gap between models — not the 30s the 429 suggested.
+    expect(callTimes[1] - callTimes[0]).toBeLessThanOrEqual(1000);
   } finally {
     vi.unstubAllGlobals();
     vi.useRealTimers();
   }
 });
 
-test("geminiJSON: once the ~75s patience budget is exhausted, later attempts skip further sleeps and fail as model_unavailable-mapped", async () => {
+test("geminiJSON: all models 429 in the sprint → patient pass 2 honors the suggested delay and can succeed; chain order preserved in both passes", async () => {
+  vi.useFakeTimers();
+  process.env.GEMINI_MODEL = "m1";
+  process.env.GEMINI_FALLBACK_MODELS = "m2";
+  const callTimes: number[] = [];
+  let calls = 0;
+  const fetchMock = vi.fn().mockImplementation(async () => {
+    callTimes.push(Date.now());
+    calls++;
+    if (calls === 1) return rateLimitedResponse("2s"); // pass 1: m1
+    if (calls === 2) return rateLimitedResponse("3s"); // pass 1: m2
+    // pass 2: m1, quota window rolled over.
+    return fakeGeminiResponse(JSON.stringify([{ ticker: "AAA", name: "A" }]));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    const promise = geminiJSON<{ ticker: string; name: string }[]>("prompt", "fake-key");
+    await vi.runAllTimersAsync();
+    expect(await promise).toEqual([{ ticker: "AAA", name: "A" }]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    // Chain order preserved: pass 1 walks m1→m2, pass 2 re-walks from m1.
+    expect(urls[0]).toContain("/m1:");
+    expect(urls[1]).toContain("/m2:");
+    expect(urls[2]).toContain("/m1:");
+    // Pass 2 waited out m1's suggested 2s before re-attempting it.
+    expect(callTimes[2] - callTimes[1]).toBeGreaterThanOrEqual(2000);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
+});
+
+test("geminiJSON: 500/503 sprint through pass 1 fast, then get a 4s pass-2 wait", async () => {
+  vi.useFakeTimers();
+  process.env.GEMINI_MODEL = "m1";
+  process.env.GEMINI_FALLBACK_MODELS = "m2";
+  const callTimes: number[] = [];
+  let calls = 0;
+  const fetchMock = vi.fn().mockImplementation(async () => {
+    callTimes.push(Date.now());
+    calls++;
+    if (calls === 1) return serverErrorResponse(500); // pass 1: m1
+    if (calls === 2) return serverErrorResponse(503); // pass 1: m2
+    return fakeGeminiResponse(JSON.stringify([{ ticker: "BBB", name: "B" }])); // pass 2: m1
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    const promise = geminiJSON<{ ticker: string; name: string }[]>("prompt", "fake-key");
+    await vi.runAllTimersAsync();
+    expect(await promise).toEqual([{ ticker: "BBB", name: "B" }]);
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls).toHaveLength(3);
+    expect(urls[2]).toContain("/m1:");
+    // Pass 1: only the 1s courtesy gap, no 4s wait yet.
+    expect(callTimes[1] - callTimes[0]).toBeLessThanOrEqual(1000);
+    // Pass 2: the fixed 4s wait for a 5xx before re-attempting m1.
+    expect(callTimes[2] - callTimes[1]).toBeGreaterThanOrEqual(4000);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
+});
+
+test("geminiJSON: the ~75s budget caps total wall time — pass 2 stops sleeping and fails as GEMINI_BUDGET_EXCEEDED", async () => {
   vi.useFakeTimers();
   process.env.GEMINI_MODEL = "m1";
   process.env.GEMINI_FALLBACK_MODELS = "m2,m3,m4,m5,m6";
-  const callTimes: number[] = [];
   const fetchMock = vi.fn().mockImplementation(async () => {
-    callTimes.push(Date.now());
-    // Every model is rate-limited with a long suggested delay (capped at the
-    // helper's 20s ceiling) — the worst case the budget exists to bound.
+    // Every model rate-limited with a long suggested delay (capped at the
+    // 20s ceiling) — the worst case the budget exists to bound.
     return rateLimitedResponse("30s");
   });
   vi.stubGlobal("fetch", fetchMock);
   try {
+    const start = Date.now();
     const promise = geminiJSON("prompt", "fake-key").catch((e: unknown) => e);
     await vi.runAllTimersAsync();
     const err = await promise;
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe("GEMINI_BUDGET_EXCEEDED");
-    // Every model in the chain was still attempted at least once — the
-    // budget cuts sleeping, not the fallback chain itself.
-    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(6);
-    const gaps = callTimes.slice(1).map((t, i) => t - callTimes[i]);
-    // Early gaps reflect the patient ~20s same-model retry wait...
-    expect(gaps.some((g) => g >= 15_000)).toBe(true);
-    // ...but once the 75s budget is spent, later gaps collapse to ~0 (no
-    // further sleeping) instead of repeating that patient wait.
-    expect(gaps.some((g) => g === 0)).toBe(true);
+    // Total wall time never exceeds the budget.
+    expect(Date.now() - start).toBeLessThanOrEqual(GEMINI_REQUEST_BUDGET_MS);
+    // Pass 1 attempted the whole chain in order; pass 2 re-walked from m1
+    // until the budget ran out (6 sprint + 4 patient with 20s waits: the
+    // 4th patient wait is clamped to the 10s left, then pass 2 stops).
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls).toHaveLength(10);
+    expect(urls.slice(0, 6).map((u, i) => u.includes(`/m${i + 1}:`))).toEqual(
+      Array(6).fill(true)
+    );
+    expect(urls.slice(6).map((u, i) => u.includes(`/m${i + 1}:`))).toEqual(
+      Array(4).fill(true)
+    );
+  } finally {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  }
+});
+
+test("geminiJSON: module-level cooldown lets the NEXT request skip a just-429'd model in its sprint pass", async () => {
+  vi.useFakeTimers();
+  process.env.GEMINI_MODEL = "m1";
+  process.env.GEMINI_FALLBACK_MODELS = "m2";
+  const fetchMock = vi.fn().mockImplementation(async (url: unknown) =>
+    String(url).includes("/m1:")
+      ? rateLimitedResponse("10s")
+      : fakeGeminiResponse(JSON.stringify([{ ticker: "CCC", name: "C" }]))
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    // Request 1: m1 429s (teaching the cooldown map), m2 succeeds.
+    const first = geminiJSON("prompt", "fake-key");
+    await vi.runAllTimersAsync();
+    expect(await first).toEqual([{ ticker: "CCC", name: "C" }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Request 2 (moments later, same warm instance): m1 is inside its 10s
+    // cooldown → skipped without spending a request; m2 is hit directly.
+    fetchMock.mockClear();
+    const second = geminiJSON("prompt", "fake-key");
+    await vi.runAllTimersAsync();
+    expect(await second).toEqual([{ ticker: "CCC", name: "C" }]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/m2:");
   } finally {
     vi.unstubAllGlobals();
     vi.useRealTimers();

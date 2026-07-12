@@ -34,18 +34,26 @@ function isRetryableStatus(s: number): boolean {
   return s === 429 || s === 503 || s === 500;
 }
 
-// --- Patient retry/backoff for Gemini's free-tier rate limits --------------
-// Free-tier RPM caps (5-15 depending on model) make 429s routine, not
-// exceptional. The user has explicitly accepted longer loading in exchange
-// for fewer hard failures, so instead of burning through the whole model
-// chain the instant a 429/500/503 shows up, we wait out a short, bounded
-// delay and retry the SAME model once before falling back — a much higher
-// success rate for a modest latency cost. Shared by geminiJSON and
-// geminiStream so both get identical pacing.
+// --- Two-pass (sprint → patient) fallback for free-tier rate limits --------
+// Free-tier RPM/daily caps (5-15 RPM) make 429s routine — and in practice it
+// is USUALLY the primary model whose daily quota is exhausted, so patiently
+// retrying the same model first would add dead time to almost every request.
+// Strategy instead:
+//   PASS 1 (sprint): one attempt per model, in chain order. On a retryable
+//     failure (429/500/503/network) move straight to the next model — only a
+//     1s courtesy gap so the next model isn't hammered in the same instant.
+//     A model that a very recent request saw a 429 on is skipped outright
+//     via the module-level cooldown map below.
+//   PASS 2 (patient, only if pass 1 fully failed with ≥1 transient failure):
+//     re-walk the chain, this time honoring Google's suggested retry delay
+//     per model (min(delay, 20s); 5s default when no hint was given), or 4s
+//     after a 500/503 — all within the remaining wall-clock budget.
+// Shared by geminiJSON and geminiStream so both get identical pacing.
+const SPRINT_GAP_MS = 1_000;
 const DEFAULT_429_WAIT_MS = 5_000; // used when Google gives no retry hint at all
 const MAX_429_WAIT_MS = 20_000;
-const RETRY_500_WAIT_MS = 4_000;
-const MODEL_GAP_MS = 2_000; // pacing gap between falling back to the next model
+const RETRY_5XX_WAIT_MS = 4_000;
+const OTHER_RETRY_WAIT_MS = 1_000; // pass-2 pacing after network/parse failures
 // Overall wall-clock budget per request across every model/attempt/wait,
 // keeping a request comfortably inside typical serverless duration limits
 // (see the `maxDuration` route exports) even in the worst case where every
@@ -82,193 +90,212 @@ function parseRetryDelayMs(res: Response, bodyText: string): number | null {
   return null;
 }
 
-type Attempt =
-  | { kind: "ok"; res: Response }
-  // Retryable status on both this attempt and its same-model retry (or the
-  // retry was skipped because the budget ran out) — caller falls back to the
-  // next model.
-  | { kind: "give-up"; status: number }
-  | { kind: "network-error" };
+// Module-level cooldown map: model → earliest-retry timestamp learned from
+// that model's last 429 (Google's suggested retryDelay, capped). Lets pass 1
+// of a NEW request skip a model that a request seconds ago learned is
+// exhausted — warm serverless instances benefit; cold starts just see an
+// empty map. Plain in-memory Map, no persistence, by design.
+const modelCooldownUntil = new Map<string, number>();
 
-// Runs one model's fetch. On a retryable status (429/500/503), waits a
-// patient, bounded delay and retries the SAME model exactly once before
-// giving up on it. Every wait is clamped to whatever's left of `deadline` —
-// once the overall request budget is spent, the retry is skipped entirely
-// (no further sleeping) and this model is given up on immediately, letting
-// the caller move on to the next model (or fail) without adding more delay.
-async function fetchWithPatientRetry(
-  doFetch: () => Promise<Response>,
-  deadline: number
-): Promise<Attempt> {
-  let res: Response;
-  try {
-    res = await doFetch();
-  } catch {
-    return { kind: "network-error" };
-  }
-  if (!isRetryableStatus(res.status)) return { kind: "ok", res };
-
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) return { kind: "give-up", status: res.status };
-
-  let waitMs: number;
-  if (res.status === 429) {
-    const bodyText = await res.text().catch(() => "");
-    waitMs = Math.min(parseRetryDelayMs(res, bodyText) ?? DEFAULT_429_WAIT_MS, MAX_429_WAIT_MS);
-  } else {
-    waitMs = RETRY_500_WAIT_MS;
-  }
-  waitMs = Math.min(waitMs, remaining);
-  await sleep(waitMs);
-
-  let retryRes: Response;
-  try {
-    retryRes = await doFetch();
-  } catch {
-    return { kind: "network-error" };
-  }
-  if (!isRetryableStatus(retryRes.status)) return { kind: "ok", res: retryRes };
-  return { kind: "give-up", status: retryRes.status };
+// Test hook: the cooldown map is module-level state and would otherwise leak
+// learned 429 cooldowns between unit tests.
+export function clearGeminiModelCooldowns(): void {
+  modelCooldownUntil.clear();
 }
 
-// Pacing gap before trying the next model in the chain, so a burst of
-// fallback attempts doesn't hammer the next model in the same instant. A
-// no-op once the overall budget is spent — the next model is still worth
-// trying immediately, just without adding more artificial delay.
-async function gapBeforeNextModel(deadline: number): Promise<void> {
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) return;
-  await sleep(Math.min(MODEL_GAP_MS, remaining));
+// Per-request record of a model's most recent failure, so pass 2 knows how
+// long each model asked us to wait. kind "transient" covers 429/500/503 and
+// network errors (status undefined); "parse" is an OK response whose output
+// the consumer couldn't use (malformed JSON).
+interface Failure {
+  kind: "transient" | "parse";
+  status?: number;
+  retryAfterMs?: number | null; // Google's suggested delay — 429 only
 }
 
-// The final, chain-exhausted error. Once the patience budget has actually
-// run out, surface this as a distinct code (mapped by callers to the
-// friendly "model_unavailable" response) rather than the ordinary
-// RATE_LIMITED path (mapped to a curt "try again in a minute") — the caller
-// already waited patiently, so "try again shortly" is the honest message.
-function chainExhaustedError(deadline: number): Error {
-  return Date.now() >= deadline
-    ? new Error("GEMINI_BUDGET_EXCEEDED")
-    : new Error("RATE_LIMITED");
+// What `consume` (the per-caller response handler) reports back to the chain
+// runner: a usable value, or "unusable output — try the next model".
+type ConsumeResult<T> = { ok: true; value: T } | { ok: false };
+
+// The shared two-pass chain runner (see the strategy comment above). Hard
+// errors — non-retryable non-OK statuses like 400/403, or anything `consume`
+// throws — abort the whole chain immediately: no other model can fix those.
+async function runModelChain<T>(
+  models: string[],
+  doFetch: (model: string) => Promise<Response>,
+  consume: (res: Response, model: string) => Promise<ConsumeResult<T>>
+): Promise<T> {
+  const deadline = Date.now() + GEMINI_REQUEST_BUDGET_MS;
+  const failures = new Map<string, Failure>();
+  // Reason: an append-only log (rather than a `let lastFailure` mutated from
+  // the closure below) — TypeScript's flow analysis can't see closure
+  // assignments, so a plain variable would stay narrowed to null.
+  const failureLog: Failure[] = [];
+  let budgetExceeded = false;
+
+  const recordFailure = (model: string, f: Failure) => {
+    failures.set(model, f);
+    failureLog.push(f);
+  };
+
+  // One request against one model; classifies the outcome without waiting.
+  const attempt = async (model: string): Promise<ConsumeResult<T>> => {
+    let res: Response;
+    try {
+      res = await doFetch(model);
+    } catch {
+      console.warn("[gemini] network error on", model);
+      recordFailure(model, { kind: "transient" });
+      return { ok: false };
+    }
+    if (isRetryableStatus(res.status)) {
+      let retryAfterMs: number | null = null;
+      if (res.status === 429) {
+        const bodyText = await res.text().catch(() => "");
+        retryAfterMs = parseRetryDelayMs(res, bodyText);
+        // Remember when this model is worth trying again, so other requests
+        // on this (warm) instance can skip it during their sprint pass.
+        modelCooldownUntil.set(
+          model,
+          Date.now() + Math.min(retryAfterMs ?? DEFAULT_429_WAIT_MS, MAX_429_WAIT_MS)
+        );
+      }
+      console.warn("[gemini]", res.status, "on", model);
+      recordFailure(model, { kind: "transient", status: res.status, retryAfterMs });
+      return { ok: false };
+    }
+    if (!res.ok) throw new Error(`GEMINI_ERROR_${res.status}`);
+    const out = await consume(res, model);
+    if (!out.ok) recordFailure(model, { kind: "parse" });
+    return out;
+  };
+
+  // PASS 1 — sprint through the chain, one attempt per model, never waiting
+  // on a rate limit: the primary model's quota is usually the exhausted one,
+  // so the fastest route to output is the next model, not a same-model retry.
+  let gapNeeded = false;
+  for (const model of models) {
+    const coolUntil = modelCooldownUntil.get(model) ?? 0;
+    if (coolUntil > Date.now()) {
+      // A request moments ago learned this model is rate-limited — record it
+      // as a 429 (with the remaining cooldown as its suggested delay) without
+      // spending a real request on it.
+      console.warn("[gemini] skipping", model, "— cooling down after a recent 429");
+      recordFailure(model, {
+        kind: "transient",
+        status: 429,
+        retryAfterMs: coolUntil - Date.now(),
+      });
+      continue;
+    }
+    if (gapNeeded) {
+      await sleep(Math.min(SPRINT_GAP_MS, Math.max(deadline - Date.now(), 0)));
+    }
+    const out = await attempt(model);
+    if (out.ok) return out.value;
+    // Courtesy gap only after an actual transient failure — a parse failure
+    // didn't rate-limit anything, so the next model needs no pacing.
+    gapNeeded = failures.get(model)?.kind === "transient";
+  }
+
+  // PASS 2 — patient re-walk, only when something transient failed in pass 1.
+  // (An all-parse-failures pass 1 means the models are responding fine but
+  // emitting unusable output — waiting won't change that, so fail now.)
+  if (failureLog.some((f) => f.kind === "transient")) {
+    for (const model of models) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        // Budget spent — fail fast to the friendly model_unavailable error
+        // rather than risk blowing past the route's maxDuration.
+        budgetExceeded = true;
+        break;
+      }
+      const f = failures.get(model);
+      const wait =
+        f?.status === 429
+          ? Math.min(f.retryAfterMs ?? DEFAULT_429_WAIT_MS, MAX_429_WAIT_MS)
+          : f?.status === 500 || f?.status === 503
+            ? RETRY_5XX_WAIT_MS
+            : OTHER_RETRY_WAIT_MS;
+      await sleep(Math.min(wait, remaining));
+      const out = await attempt(model);
+      if (out.ok) return out.value;
+    }
+  }
+
+  // Chain exhausted. GEMINI_BUDGET_EXCEEDED intentionally does NOT match the
+  // routes' RATE_LIMITED branch (curt "try again in a minute") — it falls to
+  // their default model_unavailable response ("temporarily unavailable — try
+  // again shortly"), the honest message after we already waited patiently.
+  if (budgetExceeded) throw new Error("GEMINI_BUDGET_EXCEEDED");
+  if (failureLog[failureLog.length - 1]?.kind === "parse") {
+    throw new Error("GEMINI_PARSE_ERROR");
+  }
+  throw new Error("RATE_LIMITED");
 }
 
 export async function geminiJSON<T>(prompt: string, apiKey?: string): Promise<T> {
   const { key, models } = cfg(apiKey);
-  const deadline = Date.now() + GEMINI_REQUEST_BUDGET_MS;
-  for (let i = 0; i < models.length; i++) {
-    const model = models[i];
-    const last = i === models.length - 1;
-    if (i > 0) await gapBeforeNextModel(deadline);
-
-    const attempt = await fetchWithPatientRetry(
-      () =>
-        fetch(`${BASE}/${model}:generateContent?key=${key}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: "application/json" },
-          }),
+  return runModelChain<T>(
+    models,
+    (model) =>
+      fetch(`${BASE}/${model}:generateContent?key=${key}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" },
         }),
-      deadline
-    );
-
-    if (attempt.kind === "network-error") {
-      if (last) throw chainExhaustedError(deadline);
-      console.warn("[gemini] network error on", model, "→ falling back to", models[i + 1]);
-      continue;
+      }),
+    async (res, model) => {
+      const data = await res.json();
+      const text =
+        data.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
+      try {
+        return { ok: true, value: JSON.parse(text) as T };
+      } catch {
+        // Reason: a model (esp. a weaker fallback like gemma) occasionally
+        // returns truncated/malformed JSON despite responseMimeType being
+        // set — report it as unusable so the chain tries the next model;
+        // GEMINI_PARSE_ERROR only surfaces if no model ever parses.
+        console.warn("[gemini] malformed JSON from", model);
+        return { ok: false };
+      }
     }
-    if (attempt.kind === "give-up") {
-      if (last) throw chainExhaustedError(deadline);
-      console.warn(
-        "[gemini]",
-        attempt.status,
-        "on",
-        model,
-        "(after patient retry) → falling back to",
-        models[i + 1]
-      );
-      continue;
-    }
-    const res = attempt.res;
-    if (!res.ok) throw new Error(`GEMINI_ERROR_${res.status}`);
-    const data = await res.json();
-    const text =
-      data.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      // Reason: a model (esp. a weaker fallback like gemma) occasionally
-      // returns truncated/malformed JSON despite responseMimeType being set
-      // — this used to throw uncaught straight out of the function, skipping
-      // every remaining fallback model entirely. Treat it the same as a
-      // transient status: try the next model in the chain before giving up.
-      if (last) throw new Error("GEMINI_PARSE_ERROR");
-      console.warn("[gemini] malformed JSON from", model, "→ falling back to", models[i + 1]);
-      continue;
-    }
-  }
-  // Unreachable: an empty chain is impossible (modelChain always includes the
-  // primary). Present so every path returns/throws for TypeScript.
-  throw chainExhaustedError(deadline);
+  );
 }
 
 // Returns a plain-text chunk stream (just the text deltas) extracted from
-// Gemini's SSE response — NOT SSE format. Iterates the model chain on transient
-// failures (429/503/network) the same way geminiJSON does, using the same
-// shared patient-retry/pacing helpers.
+// Gemini's SSE response — NOT SSE format. Same two-pass chain runner (and
+// therefore identical pacing) as geminiJSON.
 export async function geminiStream(
   prompt: string,
   opts: { grounding?: boolean; apiKey?: string } = {}
 ): Promise<ReadableStream<Uint8Array>> {
   const { key, models } = cfg(opts.apiKey);
-  const deadline = Date.now() + GEMINI_REQUEST_BUDGET_MS;
-  for (let i = 0; i < models.length; i++) {
-    const model = models[i];
-    const last = i === models.length - 1;
-    if (i > 0) await gapBeforeNextModel(deadline);
-
-    const body: any = { contents: [{ parts: [{ text: prompt }] }] };
-    // Grounding guard: the google_search tool is only supported by gemini-*
-    // models. Non-gemini models (e.g. gemma-*) reject tool declarations, so omit
-    // tools entirely for those attempts.
-    if (opts.grounding && model.startsWith("gemini")) {
-      body.tools = [{ google_search: {} }];
+  return runModelChain<ReadableStream<Uint8Array>>(
+    models,
+    (model) => {
+      const body: any = { contents: [{ parts: [{ text: prompt }] }] };
+      // Grounding guard: the google_search tool is only supported by gemini-*
+      // models. Non-gemini models (e.g. gemma-*) reject tool declarations, so
+      // omit tools entirely for those attempts.
+      if (opts.grounding && model.startsWith("gemini")) {
+        body.tools = [{ google_search: {} }];
+      }
+      return fetch(`${BASE}/${model}:streamGenerateContent?alt=sse&key=${key}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    },
+    async (res) => {
+      // OK status but no body — a hard error, not something another model's
+      // retry fixes (matches the previous behavior).
+      if (!res.body) throw new Error(`GEMINI_ERROR_${res.status}`);
+      return { ok: true, value: sseTextStream(res.body) };
     }
-
-    const attempt = await fetchWithPatientRetry(
-      () =>
-        fetch(`${BASE}/${model}:streamGenerateContent?alt=sse&key=${key}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }),
-      deadline
-    );
-
-    if (attempt.kind === "network-error") {
-      if (last) throw chainExhaustedError(deadline);
-      console.warn("[gemini] network error on", model, "→ falling back to", models[i + 1]);
-      continue;
-    }
-    if (attempt.kind === "give-up") {
-      if (last) throw chainExhaustedError(deadline);
-      console.warn(
-        "[gemini]",
-        attempt.status,
-        "on",
-        model,
-        "(after patient retry) → falling back to",
-        models[i + 1]
-      );
-      continue;
-    }
-    const res = attempt.res;
-    if (!res.ok || !res.body) throw new Error(`GEMINI_ERROR_${res.status}`);
-    return sseTextStream(res.body);
-  }
-  // Unreachable (see geminiJSON).
-  throw chainExhaustedError(deadline);
+  );
 }
 
 // Wraps Gemini's raw SSE byte stream into a plain-text delta stream.
