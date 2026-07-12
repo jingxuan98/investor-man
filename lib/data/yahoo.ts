@@ -2,9 +2,32 @@ import YahooFinance from "yahoo-finance2";
 import { FinancialSnapshot, YearData } from "@/lib/finance/types";
 import { fetchGrowthHistory } from "./edgar";
 
+// Hard per-request ceiling for EVERY Yahoo HTTP call. yahoo-finance2 has no
+// default fetch timeout, and on Vercel's datacenter IPs Yahoo's crumb/consent
+// flow can stall a socket indefinitely — which left page segments (The Story
+// tab) hanging at their loading skeleton forever. Same rationale as the 5s
+// AbortSignal.timeout on the SEC EDGAR fetches (lib/data/edgar.ts): a hung
+// upstream must degrade, never stall a page load.
+const YAHOO_FETCH_TIMEOUT_MS = 5000;
+
+// Injected via the constructor's `fetch` option so it covers not just the
+// module calls below (quoteSummary, chart, quote, ...) but ALSO the library's
+// INTERNAL cookie/crumb/consent-redirect fetches, which use the same function
+// (yahooFinanceFetch.js resolves moduleOpts.fetch || _env.fetch(null) ||
+// _opts.fetch || globalThis.fetch). A fresh AbortSignal.timeout per invocation
+// means each request gets its own 5s budget; any caller-supplied signal is
+// still honored via AbortSignal.any.
+const timedFetch: typeof fetch = (input, init) =>
+  fetch(input, {
+    ...init,
+    signal: init?.signal
+      ? AbortSignal.any([init.signal, AbortSignal.timeout(YAHOO_FETCH_TIMEOUT_MS)])
+      : AbortSignal.timeout(YAHOO_FETCH_TIMEOUT_MS),
+  });
+
 // yahoo-finance2 v3 exports a class (not a singleton). Instantiate once and
 // reuse. suppressNotices silences the one-time survey banner.
-const yf = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
+const yf = new YahooFinance({ suppressNotices: ["yahooSurvey"], fetch: timedFetch });
 
 export interface RawBundle {
   qs: any;

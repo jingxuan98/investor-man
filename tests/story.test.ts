@@ -128,6 +128,29 @@ test("null-composite path (empty years) never throws and degrades gracefully", (
   for (const kc of story!.killCriteria) expect(kc.breached).toBe(false);
 });
 
+test("null nextEarningsDate: buildStory still produces a complete, well-formed story", () => {
+  // A missing/odd calendarEvents payload (or a timed-out Yahoo call — see
+  // lib/data/yahoo.ts's timedFetch) leaves nextEarningsDate null; the story
+  // itself must be entirely unaffected, and the page merely omits the
+  // "NEXT CATALYST" header line (catalystDate null in story/page.tsx).
+  const s = structuredClone(FIX);
+  s.nextEarningsDate = null;
+  const b = bundleOf(s);
+
+  let story: ReturnType<typeof buildStory> | undefined;
+  expect(() => {
+    story = buildStory(b, reverseDcf(s));
+  }).not.toThrow();
+
+  expect(story!.answer.length).toBeGreaterThan(0);
+  expect(story!.narrative.length).toBeGreaterThan(0);
+  expect(story!.thesis).toHaveLength(3);
+  expect(story!.bearBaseBull).not.toBeNull();
+  expect(story!.zones).toHaveLength(5);
+  expect(story!.killCriteria).toHaveLength(4);
+  expect(story!.risks).toHaveLength(3);
+});
+
 test("thesis always has exactly 3 items and risks always has exactly 3 items", () => {
   const b = bundleOf(FIX);
   const story = buildStory(b, reverseDcf(FIX));
