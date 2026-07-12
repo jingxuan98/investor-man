@@ -75,7 +75,10 @@ export default function GeminiKeyButton() {
       </button>
 
       {open && (
-        <div className="card absolute right-0 z-50 mt-2 w-80 p-4 shadow-lg">
+        // Mobile: the button sits near the LEFT viewport edge, so anchor the
+        // panel's left edge to it (right-0 pushed it off-screen left) and
+        // clamp to the viewport. Desktop (sm+): right-anchored as before.
+        <div className="card absolute left-0 z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] p-4 shadow-lg sm:left-auto sm:right-0">
           <label htmlFor="gemini-key-input" className="text-sm font-semibold text-ink">
             Gemini API key
           </label>

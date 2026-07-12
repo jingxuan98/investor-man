@@ -44,7 +44,8 @@ function dataBlock(b: StockBundle): string {
 
 // Appended to every prompt so streamed output renders cleanly in the markdown viewer.
 const MARKDOWN_INSTRUCTION =
-  "\n\nFormat the entire response as clean Markdown with ## section headings and tables where appropriate.";
+  "\n\nFormat the entire response as clean Markdown with ## section headings and tables where appropriate. " +
+  "Never use LaTeX or math notation (no \\times, \\mathbf, $...$ math spans) — the viewer renders plain Markdown only; write math as plain text, e.g. 0.30 × 789.68 + 0.50 × 660.10 = 653.11.";
 
 function researchPrompt(b: StockBundle): string {
   const s = b.snapshot;

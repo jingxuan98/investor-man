@@ -44,9 +44,40 @@ function delimiterRow(cols: number): string {
   return "| " + Array(cols).fill("---").join(" | ") + " |";
 }
 
+// Models sometimes emit LaTeX math the viewer can't render — e.g.
+// `$(0.30 \times 789.68) = \mathbf{653.11}$` shows raw to the user. There is
+// no LaTeX renderer here (and adding KaTeX for occasional inline math is not
+// worth the weight), so translate the handful of commands that actually occur
+// in finance output into plain text/markdown. Only $…$ spans CONTAINING a
+// backslash-command are unwrapped — bare dollar amounts ("$669.21") never
+// match, so ordinary finance prose is untouched.
+const LATEX_COMMANDS: [RegExp, string][] = [
+  [/\\times/g, "×"],
+  [/\\approx/g, "≈"],
+  [/\\pm/g, "±"],
+  [/\\%/g, "%"],
+  [/\\mathbf\{([^{}]*)\}/g, "**$1**"],
+  [/\\text(?:bf|it)?\{([^{}]*)\}/g, "$1"],
+  [/\\cdot/g, "·"],
+  [/\\leq/g, "≤"],
+  [/\\geq/g, "≥"],
+];
+
+function stripLatex(markdown: string): string {
+  // Unwrap $…$ / $$…$$ spans that contain a LaTeX command, converting the
+  // commands inside. Spans without a backslash (real dollar figures, or a
+  // price range like "$40 and $50") are left exactly as written.
+  const unwrapped = markdown.replace(
+    /\${1,2}([^$\n]*\\[a-zA-Z]+[^$\n]*)\${1,2}/g,
+    (_m, inner: string) => inner.trim()
+  );
+  // Then convert commands anywhere (also catches LaTeX leaked outside $ spans).
+  return LATEX_COMMANDS.reduce((s, [re, sub]) => s.replace(re, sub), unwrapped);
+}
+
 export function normalizeMarkdownTables(markdown: string): string {
   try {
-    const lines = markdown.split("\n");
+    const lines = stripLatex(markdown).split("\n");
     const out: string[] = [];
     let inFence = false;
     let i = 0;
