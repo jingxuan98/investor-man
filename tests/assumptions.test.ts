@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import {
+  assumptionProvenance,
   autoNormalGrowth,
   autoWacc,
   classifyStock,
@@ -187,4 +188,90 @@ test("styleComposite: 3-4 values → plain mean", () => {
 test("styleComposite: ≤2 values → n/a", () => {
   expect(styleComposite([1, 2])).toEqual({ value: null, method: null });
   expect(styleComposite([])).toEqual({ value: null, method: null });
+});
+
+// --- assumptionProvenance ------------------------------------------------
+// Task 38 part B: users must see WHAT growth/discount figure the auto
+// pipeline resolved to and WHERE it came from — these tests pin the exact
+// contract the Intrinsic Value page's Assumptions strip reads.
+
+test("assumptionProvenance on the FIX fixture: Yahoo-years source, no clamp, matches autoNormalGrowth/autoWacc", () => {
+  const p = assumptionProvenance(FIX, "calibrated");
+  // FIX has no growthHistory → falls back to s.years (4 endpoints, 2022-2025).
+  expect(p.growthSource).toBe("yahoo");
+  expect(p.spanYears).toEqual([2022, 2025]);
+  expect(p.growthRaw).toBeCloseTo(0.1, 3);
+  expect(p.growthUsed).toBeCloseTo(autoNormalGrowth(FIX, "calibrated"), 10);
+  // 10% is within [2%, 30%] — nothing was clamped.
+  expect(p.clampNote).toBeNull();
+  expect(p.wacc).toBeCloseTo(autoWacc(FIX, "calibrated"), 10);
+  expect(p.waccParts).toEqual({ rf: FIX.riskFreeRate, beta: FIX.beta, erp: 0.055, clamped: false });
+  expect(p.pegGrowth).toBeCloseTo(pegGrowth(FIX)!, 10);
+  expect(p.pegSource).toBe("yahoo");
+  expect(p.terminal).toBeCloseTo(0.04, 10);
+});
+
+test("assumptionProvenance: EDGAR window (≥5 entries) reports source 'sec' and its own FY span", () => {
+  const s: FinancialSnapshot = { ...FIX, growthHistory: growthHistory(6, 0.2, 0.3) };
+  const p = assumptionProvenance(s, "calibrated");
+  expect(p.growthSource).toBe("sec");
+  expect(p.spanYears).toEqual([2020, 2025]); // 6 endpoints, newest 2025 → oldest 2020
+  expect(p.growthRaw).toBeCloseTo(0.2, 6);
+  expect(p.pegGrowth).toBeCloseTo(0.3, 6);
+  expect(p.pegSource).toBe("sec");
+});
+
+test("assumptionProvenance: no history at all → 'default' source, null span, 5% growth, no clamp note", () => {
+  const s: FinancialSnapshot = { ...FIX, years: [], growthHistory: null };
+  const p = assumptionProvenance(s, "calibrated");
+  expect(p.growthSource).toBe("default");
+  expect(p.spanYears).toBeNull();
+  expect(p.growthRaw).toBeNull();
+  expect(p.growthUsed).toBe(0.05);
+  expect(p.clampNote).toBeNull(); // nothing to compare against → no clamp claim
+});
+
+test("assumptionProvenance: calibrated clamp notes — hyper-growth capped at 30%, near-zero floored at 2%", () => {
+  const hot: FinancialSnapshot = { ...FIX, growthHistory: growthHistory(6, 0.5, 0.5) };
+  const cold: FinancialSnapshot = { ...FIX, growthHistory: growthHistory(6, 0.01, 0.01) };
+  const pHot = assumptionProvenance(hot, "calibrated");
+  const pCold = assumptionProvenance(cold, "calibrated");
+  expect(pHot.growthRaw).toBeCloseTo(0.5, 6);
+  expect(pHot.growthUsed).toBeCloseTo(0.3, 6);
+  expect(pHot.clampNote).toBe("capped at 30%");
+  expect(pCold.growthRaw).toBeCloseTo(0.01, 6);
+  expect(pCold.growthUsed).toBeCloseTo(0.02, 6);
+  expect(pCold.clampNote).toBe("floored at 2%");
+});
+
+test("assumptionProvenance: textbook variant is never clamped (growthUsed == growthRaw exactly) and uses its own 2.5% terminal default", () => {
+  const hot: FinancialSnapshot = { ...FIX, growthHistory: growthHistory(6, 0.5, 0.5) };
+  const p = assumptionProvenance(hot, "textbook");
+  expect(p.growthUsed).toBeCloseTo(p.growthRaw!, 10);
+  expect(p.clampNote).toBeNull();
+  expect(p.terminal).toBeCloseTo(0.025, 10);
+});
+
+test("assumptionProvenance: WACC clamp — calibrated caps a hot beta at 12%, textbook doesn't", () => {
+  const hotBeta = { ...FIX, beta: 3.0 };
+  const pCal = assumptionProvenance(hotBeta, "calibrated");
+  const pTb = assumptionProvenance(hotBeta, "textbook");
+  expect(pCal.wacc).toBeCloseTo(0.12, 10);
+  expect(pCal.waccParts.clamped).toBe(true);
+  expect(pTb.wacc).toBeCloseTo(0.205, 10); // 0.04 + 3.0 * 0.055, uncapped
+  expect(pTb.waccParts.clamped).toBe(false);
+});
+
+test("assumptionProvenance: pegSource falls back to revenue's source when net-income CAGR is incomputable anywhere", () => {
+  // netIncome is null both in the EDGAR window AND in the Yahoo statement
+  // years, so niProv can only resolve to null — pegGrowth must fall back to
+  // revenueCagr5y (and report ITS source), not attribute revenue's number to
+  // a phantom net-income read.
+  const gh = growthHistory(6, 0.15, 0.15)!.map((r) => ({ ...r, netIncome: null }));
+  const yearsNoNi = FIX.years.map((y) => ({ ...y, netIncome: null }));
+  const s: FinancialSnapshot = { ...FIX, growthHistory: gh, years: yearsNoNi };
+  const p = assumptionProvenance(s, "calibrated");
+  expect(p.pegGrowth).toBeCloseTo(0.15, 6);
+  expect(p.pegSource).toBe("sec"); // matches revenueCagr5y's own EDGAR source
+  expect(p.growthSource).toBe("sec");
 });

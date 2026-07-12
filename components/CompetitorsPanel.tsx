@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { fmtMoney, fmtPct } from "@/lib/format";
 import { geminiHeaders } from "@/lib/geminiKeyHeader";
+import { useVariant } from "@/components/VariantProvider";
 
 interface Competitor {
   ticker: string;
@@ -30,6 +31,14 @@ function upsideClass(upside: number | null): string {
 }
 
 export default function CompetitorsPanel({ ticker }: { ticker: string }) {
+  // Global calibrated/textbook selection — peer fair-value/upside must match
+  // the SAME variant as the subject stock's own tabs (task brief: "sector-
+  // average + competitor comparisons" reads the selected variant's
+  // composite). Unlike the subject stock's own numbers (server-computed pair,
+  // no refetch on toggle), each peer's summary is already a client-side
+  // per-row fetch, so a variant flip re-fetches those rows — same round-trip
+  // this panel already makes on every ticker change.
+  const { variant } = useVariant();
   const [listState, setListState] = useState<"loading" | "ready" | "error">(
     "loading"
   );
@@ -80,7 +89,7 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
         if (!active()) return;
         let summary: RowState = null;
         try {
-          const res = await fetch(`/api/summary/${c.ticker}`);
+          const res = await fetch(`/api/summary/${c.ticker}?variant=${variant}`);
           if (res.ok) summary = (await res.json()) as Summary;
         } catch {
           summary = null;
@@ -91,7 +100,7 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
       }
     })();
     // No cleanup: the next run bumping runId is what retires this one.
-  }, [ticker]);
+  }, [ticker, variant]);
 
   if (listState === "error") {
     return (

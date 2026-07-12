@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { geminiHeaders, GEMINI_KEY_STORAGE_KEY } from "@/lib/geminiKeyHeader";
 import { exportReportPdf } from "@/lib/exportPdf";
+import { useVariant } from "@/components/VariantProvider";
 
 type ReportType = "research" | "model3" | "bear" | "bull" | "risks" | "deepdive";
 
@@ -62,6 +63,12 @@ export default function ResearchClient({
   // browser key is available. The report buttons stay enabled either way —
   // a 503 from the server carries the same hint if the user clicks through.
   const [hasBrowserKey, setHasBrowserKey] = useState(false);
+  // Global calibrated/textbook selection — sent with every report request so
+  // the prompt's data block/methods table embed the SAME variant driving the
+  // rest of the site (task brief: "AI insight prompts"). The research route
+  // keys its cache on {ticker, type, variant}, so switching variants doesn't
+  // serve a stale report computed under the other one.
+  const { variant } = useVariant();
   const reportRef = useRef<HTMLElement>(null);
   const [pdfNote, setPdfNote] = useState<string | null>(null);
   // Monotonic run token: a newer run retires older ones so their appends don't
@@ -94,7 +101,7 @@ export default function ResearchClient({
       const res = await fetch("/api/research", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...geminiHeaders() },
-        body: JSON.stringify({ ticker, type, force }),
+        body: JSON.stringify({ ticker, type, force, variant }),
       });
 
       // Handle non-200 BEFORE reading the body as a stream: error responses

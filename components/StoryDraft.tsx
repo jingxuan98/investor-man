@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { geminiHeaders } from "@/lib/geminiKeyHeader";
 import { exportReportPdf } from "@/lib/exportPdf";
+import { useVariant } from "@/components/VariantProvider";
 
 // The Story tab's "Draft with AI" enrichment — a single-button variant of
 // ResearchClient's fetch/stream pattern, fixed to the "story" report type.
@@ -12,6 +13,11 @@ import { exportReportPdf } from "@/lib/exportPdf";
 // machine-drafted blocks 1-3 (see lib/finance/story.ts + lib/ai/prompts.ts's
 // storyPrompt) as an editorial pass. Cached server-side under research:{T}:story.
 export default function StoryDraft({ ticker }: { ticker: string }) {
+  // Same rationale as ResearchClient: send the globally-selected variant so
+  // the AI editorial pass rewrites the SAME blocks 1-3 currently on screen
+  // (buildStory's variant-selected output), not calibrated's regardless of
+  // what the reader has toggled to.
+  const { variant } = useVariant();
   const [started, setStarted] = useState(false);
   const [text, setText] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -44,7 +50,7 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
       const res = await fetch("/api/research", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...geminiHeaders() },
-        body: JSON.stringify({ ticker, type: "story", force }),
+        body: JSON.stringify({ ticker, type: "story", force, variant }),
       });
 
       // Handle non-200 BEFORE reading the body as a stream: error responses

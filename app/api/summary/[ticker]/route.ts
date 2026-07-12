@@ -1,13 +1,26 @@
 import { NextResponse } from "next/server";
-import { getStockBundle } from "@/lib/data/getStockData";
+import { getStockBundle, variantPair } from "@/lib/data/getStockData";
+import { ValuationVariant } from "@/lib/finance/types";
+
+// CompetitorsPanel / InsightPeerPanel send the viewer's globally-selected
+// variant (?variant=calibrated|textbook) so a peer's fair value/upside/
+// quality score reflects the SAME calibrated-vs-textbook choice as the
+// subject stock's own tabs — otherwise flipping the header toggle would
+// change the subject's numbers but leave every peer row on calibrated.
+function parseVariant(v: string | null): ValuationVariant {
+  return v === "textbook" ? "textbook" : "calibrated";
+}
 
 export async function GET(
-  _: Request,
+  req: Request,
   { params }: { params: Promise<{ ticker: string }> }
 ) {
   const { ticker } = await params;
+  const variant = parseVariant(new URL(req.url).searchParams.get("variant"));
   try {
-    const { snapshot: s, valuation: v, quality: q } = await getStockBundle(ticker);
+    const bundle = await getStockBundle(ticker);
+    const s = bundle.snapshot;
+    const { valuation: v, quality: q } = variantPair(bundle)[variant];
     const fairValue = v.composite;
     const upside = fairValue !== null ? fairValue / s.price - 1 : null;
     return NextResponse.json({

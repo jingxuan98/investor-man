@@ -2,13 +2,20 @@
 
 import { useMemo, useState } from "react";
 import { computeValuation } from "@/lib/finance/valuation";
-import { classifyStock, revenueCagr5y } from "@/lib/finance/assumptions";
+import {
+  AssumptionProvenance,
+  assumptionProvenance,
+  classifyStock,
+  revenueCagr5y,
+} from "@/lib/finance/assumptions";
 import { styleComposite } from "@/lib/finance/helpers";
 import { Assumptions, FinancialSnapshot, Horizon, ValuationVariant } from "@/lib/finance/types";
 import { fmtMoney } from "@/lib/format";
 import KnobField from "@/components/KnobField";
 import Term from "@/components/Term";
 import SignalBadge from "@/components/SignalBadge";
+import VariantToggle, { VARIANT_LABEL } from "@/components/VariantToggle";
+import { useVariant } from "@/components/VariantProvider";
 
 // Raw text state for the five knob inputs — kept as strings (not numbers) so
 // the field can hold transient/partial input (e.g. "-", "1.") without losing
@@ -44,6 +51,13 @@ function parseNumber(raw: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+// Plain (unsigned) percentage — the assumption-provenance strip shows rates
+// like "18.5%", not signed deltas, so lib/format's fmtPct (which prefixes a
+// "+") doesn't fit here.
+function pct1(x: number): string {
+  return `${(x * 100).toFixed(1)}%`;
+}
+
 function Bar({
   value,
   price,
@@ -77,58 +91,6 @@ function Bar({
       <div className={`iv-fill ${color}`} style={{ width: `${widthPct}%` }} />
       <div className="iv-tick" style={{ left: `${tickPct}%` }} />
     </div>
-  );
-}
-
-const VARIANT_LABEL: Record<ValuationVariant, string> = {
-  calibrated: "Calibrated",
-  textbook: "Textbook (no caps)",
-};
-
-const VARIANT_TOOLTIP: Record<ValuationVariant, string> = {
-  calibrated:
-    "Calibrated to a professional reference calculator: growth capped 30%, discount capped 12%, no value counted beyond year 20, TTM cash flows, sector multiples.",
-  textbook:
-    "Classic finance-textbook DCF: uncapped CAPM discount, uncapped growth, linear fade PLUS a terminal value for the business beyond year 20, audited fiscal-year figures, own-history multiples only. Punishes volatile stocks harder and rewards durable ones more.",
-};
-
-// Segmented variant toggle. Mirrors Term.tsx's hover-tooltip pattern (same
-// group/tooltip CSS classes) so the popover matches the app's design system.
-// The custom card is the only tooltip UI — `aria-label` (not `title`) carries
-// the text for assistive tech so we never double up with a native browser
-// tooltip. `align` flips the card's anchor/origin so it opens toward the
-// inside of the toggle group instead of running off the edge of the section.
-function VariantButton({
-  variant,
-  active,
-  align,
-  onClick,
-}: {
-  variant: ValuationVariant;
-  active: boolean;
-  align: "left" | "right";
-  onClick: () => void;
-}) {
-  const posClass =
-    align === "left"
-      ? "left-0 origin-top-left"
-      : "right-0 origin-top-right";
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      aria-label={VARIANT_TOOLTIP[variant]}
-      className={`group relative tab-btn !px-3 !py-1.5 !text-xs ${active ? "active" : ""}`}
-      onClick={onClick}
-    >
-      {VARIANT_LABEL[variant]}
-      <span
-        role="tooltip"
-        className={`pointer-events-none absolute top-full z-50 mt-1.5 w-72 max-w-[calc(100vw-2rem)] scale-95 whitespace-normal break-words rounded-lg border border-line bg-card p-2.5 text-xs font-normal normal-case leading-snug tracking-normal text-ink3 opacity-0 shadow-lg transition-all duration-150 group-hover:scale-100 group-hover:opacity-100 ${posClass}`}
-      >
-        {VARIANT_TOOLTIP[variant]}
-      </span>
-    </button>
   );
 }
 
@@ -301,6 +263,74 @@ function defaultTabForClass(cls: "growth" | "balanced" | "mature"): StyleTab {
   return "all";
 }
 
+// Compact, always-visible provenance strip: WHAT growth/discount figure this
+// variant's auto pipeline resolved to and WHERE it came from — the task
+// brief's requirement that users see this, not just the resulting number.
+// Pure display of assumptionProvenance()'s output; live per variant (textbook
+// shows its own uncapped growth/WACC and its own terminal default).
+function AssumptionsStrip({
+  provenance: p,
+  variant,
+}: {
+  provenance: AssumptionProvenance;
+  variant: ValuationVariant;
+}) {
+  const growthSourceLabel =
+    p.growthSource === "sec"
+      ? "SEC annual filings"
+      : p.growthSource === "yahoo"
+        ? "Yahoo Finance statement history"
+        : "no revenue history available — default assumed";
+  const growthSpanText = p.spanYears
+    ? `5Y revenue CAGR FY${p.spanYears[0]}→FY${p.spanYears[1]} from ${growthSourceLabel}`
+    : growthSourceLabel;
+  const growthClampText = p.clampNote ? ` (${p.clampNote})` : "";
+
+  const waccClampText = !p.waccParts.clamped
+    ? ""
+    : variant === "textbook"
+      ? " (floored at 0.1%)"
+      : p.wacc >= 0.12 - 1e-9
+        ? " (capped at 12%)"
+        : " (floored at 4%)";
+
+  const pegSourceLabel =
+    p.pegSource === "sec" ? "SEC annual filings" : p.pegSource === "yahoo" ? "Yahoo Finance" : "default assumption";
+
+  return (
+    <div className="rounded-lg border border-line bg-page p-3 text-xs text-ink2">
+      <p className="mb-1.5 font-semibold uppercase tracking-wide text-ink3">Assumptions</p>
+      <div className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
+        <p>
+          <span className="font-medium text-ink">Growth (Y1–5): {pct1(p.growthUsed)}</span> — {growthSpanText}
+          {growthClampText}.
+        </p>
+        <p>
+          <span className="font-medium text-ink">Discount: {pct1(p.wacc)}</span> = {pct1(p.waccParts.rf)} risk-free +
+          β {p.waccParts.beta.toFixed(2)} × {pct1(p.waccParts.erp)} equity premium{waccClampText}.
+        </p>
+        <p>
+          <span className="font-medium text-ink">PEG growth: {p.pegGrowth === null ? "n/a" : pct1(p.pegGrowth)}</span>{" "}
+          — 5Y net-income CAGR from {pegSourceLabel}.
+        </p>
+        <p>
+          <span className="font-medium text-ink">Terminal: {pct1(p.terminal)}</span>{" "}
+          {variant === "textbook"
+            ? "— linear fade endpoint, plus a Gordon terminal value beyond year 20."
+            : "— years 11–20 growth rate; no value is counted beyond year 20."}
+        </p>
+      </div>
+      <p className="mt-2 leading-snug">
+        Growth and PEG figures come from the company&apos;s own annual reports via SEC EDGAR, falling back to Yahoo
+        Finance&apos;s statement history when EDGAR history is too short.{" "}
+        {variant === "textbook"
+          ? "This textbook view removes every cap and floor, so a volatile or hyper-growth company can price out at an extreme growth or discount rate."
+          : "Calibrated caps and floors keep those figures within the range a professional analyst would typically use."}
+      </p>
+    </div>
+  );
+}
+
 export default function ValueTable({
   snapshot,
   updatedDate,
@@ -309,7 +339,10 @@ export default function ValueTable({
   updatedDate?: string;
 }) {
   const [knobs, setKnobs] = useState<KnobInputs>(EMPTY_KNOBS);
-  const [activeVariant, setActiveVariant] = useState<ValuationVariant>("calibrated");
+  // Global calibrated/textbook selection (VariantProvider, mounted in the
+  // stock layout) — the SAME state the header toggle drives, kept in sync
+  // per the task brief ("it and the header toggle stay in sync").
+  const { variant: activeVariant } = useVariant();
   const [activeHorizon, setActiveHorizon] = useState<Horizon>("current");
 
   // Pure functions of the snapshot prop — computed client-side, no network
@@ -400,6 +433,16 @@ export default function ValueTable({
 
   const compositeUpside = out.composite !== null ? out.composite / price - 1 : null;
 
+  // Assumption provenance strip: WHAT growth/discount figure this variant's
+  // auto pipeline resolved to and WHERE it came from — pure function of
+  // snapshot + variant (unaffected by manual knob overrides below, which are
+  // already visible as their own placeholder/typed values in the Assumptions
+  // card at the bottom of this table).
+  const provenance = useMemo(
+    () => assumptionProvenance(snapshot, activeVariant),
+    [snapshot, activeVariant]
+  );
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -427,20 +470,7 @@ export default function ValueTable({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex gap-1" role="group" aria-label="Valuation methodology variant">
-            <VariantButton
-              variant="calibrated"
-              active={activeVariant === "calibrated"}
-              align="left"
-              onClick={() => setActiveVariant("calibrated")}
-            />
-            <VariantButton
-              variant="textbook"
-              active={activeVariant === "textbook"}
-              align="right"
-              onClick={() => setActiveVariant("textbook")}
-            />
-          </div>
+          <VariantToggle />
           <div className="flex gap-1" role="group" aria-label="Valuation horizon">
             {HORIZONS.map((h, i) => (
               <HorizonButton
@@ -461,6 +491,8 @@ export default function ValueTable({
           </div>
         </div>
       </div>
+
+      <AssumptionsStrip provenance={provenance} variant={activeVariant} />
 
       <div className="flex flex-wrap items-center gap-4 text-xs text-ink2">
         {LEGEND.map((l) => (

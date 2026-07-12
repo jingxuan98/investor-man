@@ -38,21 +38,49 @@ function edgarWindow(
   return nonNull.length >= 4 ? win : null;
 }
 
+// A CAGR figure plus WHERE it came from — shared by revenueCagr5y/pegGrowth
+// (which only need the number) and assumptionProvenance (which needs to show
+// its provenance too). "sec" = the EDGAR growthHistory window (edgarWindow
+// above); "yahoo" = fell back to the statement years on s.years; "default" =
+// neither had ≥2 usable points, so there's nothing to attribute a source to.
+interface CagrProvenance {
+  value: number | null;
+  source: "sec" | "yahoo" | "default";
+  spanYears: [number, number] | null; // [oldest FY, newest FY] of the window actually used
+}
+
+function cagrWithProvenance(
+  s: FinancialSnapshot,
+  pick: (r: { year: number; revenue: number | null; netIncome: number | null }) => number | null
+): CagrProvenance {
+  const win = edgarWindow(s, pick);
+  if (win !== null) {
+    const value = cagrOf(win, pick);
+    if (value !== null) {
+      // win is newest-first — oldest endpoint is the last element.
+      return { value, source: "sec", spanYears: [win[win.length - 1].year, win[0].year] };
+    }
+  }
+  const value = cagrOf(s.years, (y) => pick(y));
+  if (value !== null) {
+    return { value, source: "yahoo", spanYears: [s.years[s.years.length - 1].year, s.years[0].year] };
+  }
+  return { value: null, source: "default", spanYears: null };
+}
+
 // 5Y revenue CAGR, uncapped. Prefers SEC EDGAR history (Yahoo caps at ~4y);
 // falls back to Yahoo statement years. Window = up to 6 endpoints / 5
 // transitions, matching the reference calculator's ACTUAL seed inputs
 // (META 18.51, TSLA 24.63 — read from its DOM inputs, not its text labels).
 export function revenueCagr5y(s: FinancialSnapshot): number | null {
-  const win = edgarWindow(s, (r) => r.revenue);
-  return cagrOf(win ?? s.years, (y: any) => y.revenue);
+  return cagrWithProvenance(s, (r) => r.revenue).value;
 }
 
 // 5Y net-income CAGR, uncapped — the reference site's PEG growth input
 // (back-solved: GOOGL 24.8 vs actual 25.2, NVDA ≈99, KO 9.7 vs 10.0).
 // Falls back to revenue CAGR when NI CAGR is incomputable (losses).
 export function pegGrowth(s: FinancialSnapshot): number | null {
-  const win = edgarWindow(s, (r) => r.netIncome);
-  const ni = cagrOf(win ?? s.years, (y: any) => y.netIncome);
+  const ni = cagrWithProvenance(s, (r) => r.netIncome).value;
   return ni ?? revenueCagr5y(s);
 }
 
@@ -119,5 +147,62 @@ export function resolveAssumptions(
     marginExpansion: overrides.marginExpansion ?? 0,
     wacc: overrides.wacc ?? autoWacc(s, variant),
     hHalfLife: overrides.hHalfLife ?? 4,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Assumption provenance — WHAT growth/discount figure each variant's auto
+// pipeline resolved to and WHERE it came from, for the Intrinsic Value page's
+// "Assumptions" strip (users should be able to see why a growth % is what it
+// is, not just the number). Pure, reuses the exact internals above — no
+// re-derivation of the cap/floor/CAPM math, just reporting on it.
+// ---------------------------------------------------------------------------
+export interface AssumptionProvenance {
+  growthRaw: number | null; // raw 5Y revenue CAGR, before any cap/floor
+  growthUsed: number; // what autoNormalGrowth(s, variant) actually resolved to
+  growthSource: "sec" | "yahoo" | "default";
+  spanYears: [number, number] | null; // [oldest FY, newest FY] of the CAGR window
+  clampNote: string | null; // "capped at 30%" | "floored at 2%" | null
+  wacc: number;
+  waccParts: { rf: number; beta: number; erp: number; clamped: boolean };
+  pegGrowth: number | null; // 5Y net-income CAGR (or its revenue-CAGR fallback)
+  pegSource: "sec" | "yahoo" | "default";
+  terminal: number; // resolved terminal growth default for this variant
+}
+
+export function assumptionProvenance(
+  s: FinancialSnapshot,
+  variant: ValuationVariant = "calibrated"
+): AssumptionProvenance {
+  const revProv = cagrWithProvenance(s, (r) => r.revenue);
+  const growthUsed = autoNormalGrowth(s, variant);
+  // Reason: comparing the resolved (post-cap/floor) value against the raw
+  // CAGR — rather than re-hardcoding the 2%/30% thresholds here — means this
+  // note can never drift out of sync with autoNormalGrowth's own clamp logic.
+  let clampNote: string | null = null;
+  if (revProv.value !== null && Math.abs(growthUsed - revProv.value) > 1e-9) {
+    clampNote = growthUsed < revProv.value ? "capped at 30%" : "floored at 2%";
+  }
+
+  const beta = s.beta ?? 1;
+  const erp = 0.055;
+  const rawWacc = s.riskFreeRate + beta * erp;
+  const wacc = autoWacc(s, variant);
+  const clamped = Math.abs(wacc - rawWacc) > 1e-9;
+
+  const niProv = cagrWithProvenance(s, (r) => r.netIncome);
+  const pegSource = niProv.value !== null ? niProv.source : revProv.source;
+
+  return {
+    growthRaw: revProv.value,
+    growthUsed,
+    growthSource: revProv.source,
+    spanYears: revProv.spanYears,
+    clampNote,
+    wacc,
+    waccParts: { rf: s.riskFreeRate, beta, erp, clamped },
+    pegGrowth: pegGrowth(s),
+    pegSource,
+    terminal: resolveAssumptions(s, {}, variant).terminalGrowth,
   };
 }

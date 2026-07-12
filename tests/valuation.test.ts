@@ -438,3 +438,41 @@ test("null endpoint => null quarterly value (wacc=0 nulls the DCF family at both
   expect(model(q1, "dcf20").value).toBeNull();
   expect(model(q2, "dcf20").value).toBeNull();
 });
+
+// Task 38 part A: q1/q2 must be built off the SAME variant's own current/
+// nextYear endpoints — a textbook q1/q2 must never accidentally interpolate
+// calibrated's endpoints (e.g. from a shared/miswired cache or default-arg
+// bug). Textbook's own terminal-growth default (2.5%) and linear-fade shape
+// differ from calibrated's (4%, three-stage) even with identical auto
+// growth/WACC on this fixture, so the two variants' dcf20 current values are
+// provably different — a strong enough signal to catch cross-variant mixups.
+test("textbook q1/q2 interpolate between TEXTBOOK's own endpoints, not calibrated's", () => {
+  const tbCurrent = computeValuation(FIX, {}, "textbook", "current");
+  const tbNext = computeValuation(FIX, {}, "textbook", "nextYear");
+  const tbQ1 = computeValuation(FIX, {}, "textbook", "q1");
+  const tbQ2 = computeValuation(FIX, {}, "textbook", "q2");
+  const calCurrent = computeValuation(FIX, {}, "calibrated", "current");
+
+  const tbCur = model(tbCurrent, "dcf20").value!;
+  const tbNextVal = model(tbNext, "dcf20").value!;
+  const tbQ1Val = model(tbQ1, "dcf20").value!;
+  const tbQ2Val = model(tbQ2, "dcf20").value!;
+  const calCur = model(calCurrent, "dcf20").value!;
+
+  // Sanity: calibrated and textbook actually diverge on this fixture (2.5%
+  // vs 4% terminal default + linear-fade vs three-stage shape) — otherwise
+  // this test couldn't distinguish "textbook's own endpoints" from
+  // "calibrated's endpoints" at all.
+  expect(Math.abs(tbCur - calCur)).toBeGreaterThan(0.01);
+
+  expect(tbQ1Val).toBeCloseTo(tbCur * Math.pow(tbNextVal / tbCur, 0.25), 6);
+  expect(tbQ2Val).toBeCloseTo(tbCur * Math.pow(tbNextVal / tbCur, 0.5), 6);
+
+  // And explicitly NOT calibrated's interpolation (would only coincidentally
+  // match if tbCur/tbNextVal happened to equal calibrated's, which the
+  // divergence check above already rules out).
+  const calNext = computeValuation(FIX, {}, "calibrated", "nextYear");
+  const calNextVal = model(calNext, "dcf20").value!;
+  const wrongQ1 = calCur * Math.pow(calNextVal / calCur, 0.25);
+  expect(tbQ1Val).not.toBeCloseTo(wrongQ1, 2);
+});

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { geminiHeaders } from "@/lib/geminiKeyHeader";
+import { useVariant } from "@/components/VariantProvider";
 
 interface Competitor {
   ticker: string;
@@ -43,6 +44,11 @@ export default function InsightPeerPanel({
   ownQualityScore: number | null;
   ownUpside: number | null;
 }) {
+  // Global calibrated/textbook selection — same rationale as CompetitorsPanel:
+  // peer rows are an independent client-side fetch per ticker, so a variant
+  // flip re-fetches them to match the same variant driving ownQualityScore/
+  // ownUpside (computed server-side by the caller).
+  const { variant } = useVariant();
   const [listState, setListState] = useState<"loading" | "ready" | "error">("loading");
   const [noApiKey, setNoApiKey] = useState(false);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
@@ -87,7 +93,7 @@ export default function InsightPeerPanel({
         if (!active()) return;
         let summary: RowState = null;
         try {
-          const res = await fetch(`/api/summary/${c.ticker}`);
+          const res = await fetch(`/api/summary/${c.ticker}?variant=${variant}`);
           if (res.ok) summary = (await res.json()) as Summary;
         } catch {
           summary = null;
@@ -97,7 +103,7 @@ export default function InsightPeerPanel({
         await sleep(300);
       }
     })();
-  }, [ticker]);
+  }, [ticker, variant]);
 
   if (listState === "error") {
     return (
