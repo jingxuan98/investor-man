@@ -2,6 +2,13 @@ import { NextResponse } from "next/server";
 import { cacheGet, cacheSet } from "@/lib/db";
 import { geminiJSON, parseCompetitors } from "@/lib/ai/gemini";
 
+// Headroom for the patient Gemini retry/backoff in lib/ai/gemini.ts (up to a
+// ~75s internal budget in the worst case — every model rate-limited). Unlike
+// /api/research this route is non-streaming JSON — the client waits the
+// FULL duration before seeing anything — so this ceiling must comfortably
+// exceed that 75s budget or the platform could kill the function first.
+export const maxDuration = 90;
+
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ ticker: string }> }

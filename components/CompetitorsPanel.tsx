@@ -122,6 +122,9 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
   if (listState === "loading") {
     return (
       <div className="space-y-2">
+        <p className="text-sm text-ink2">
+          Generating — can take a minute or two when free-tier models are busy…
+        </p>
         {[0, 1, 2, 3, 4].map((i) => (
           <div key={i} className="h-14 animate-pulse rounded-lg border border-line bg-track" />
         ))}

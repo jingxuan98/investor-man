@@ -199,7 +199,11 @@ export default function ResearchClient({
 
       {active && !error && (
         <div className="card p-6">
-          {streaming && text === "" && <p className="text-sm text-ink2">Generating report…</p>}
+          {streaming && text === "" && (
+            <p className="text-sm text-ink2">
+              Generating — can take a minute or two when free-tier models are busy…
+            </p>
+          )}
           {done && (
             <div className="mb-3 flex justify-end">
               <button onClick={handleExportPdf} className="btn btn-outline !py-1 text-xs">

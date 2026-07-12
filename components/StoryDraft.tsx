@@ -125,7 +125,9 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
       {started && !error && (
         <div className="rounded-lg border border-line bg-page p-6">
           {streaming && text === "" && (
-            <p className="text-sm text-ink2">Drafting editorial pass…</p>
+            <p className="text-sm text-ink2">
+              Generating — can take a minute or two when free-tier models are busy…
+            </p>
           )}
           {done && (
             <div className="mb-3 flex justify-end">

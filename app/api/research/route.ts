@@ -7,6 +7,13 @@ import { ValuationVariant } from "@/lib/finance/types";
 
 const TTL_24H = 24 * 3600;
 
+// Headroom for the patient Gemini retry/backoff in lib/ai/gemini.ts (up to a
+// ~75s internal budget in the worst case — every model rate-limited). This
+// route streams, so the client starts seeing output as soon as any model
+// call succeeds; the extra ceiling only matters for the pathological
+// all-models-busy case.
+export const maxDuration = 90;
+
 // POST { ticker, type, force?, variant? } → streamed plain-text markdown of
 // the report. Cache key research:{TICKER}:{type}:{variant} — MUST include
 // variant, since the data block/methods table embed the selected variant's
