@@ -129,7 +129,44 @@ export function extractGrowthHistory(companyFactsJson: unknown): GrowthYear[] {
     return merged;
   };
 
-  const revByYear = annualByYear(revenueTags);
+  // Derived pseudo-tag for a fiscal year: the SUM of two tags, but only for
+  // years where BOTH have a valid annual entry (no half-filled sums).
+  const annualSumForTags = (tagA: string, tagB: string): Map<number, number> => {
+    const a = annualForTag(tagA);
+    const b = annualForTag(tagB);
+    const out = new Map<number, number>();
+    for (const [fy, va] of a) {
+      const vb = b.get(fy);
+      if (vb !== undefined) out.set(fy, va + vb);
+    }
+    return out;
+  };
+
+  // Derived "gross bank revenue": InterestAndDividendIncomeOperating (gross
+  // interest & dividend income, BEFORE subtracting interest expense) plus
+  // NoninterestIncome (fee income). Bank-holding-company filers (BAC, GS, ...)
+  // tag their income-statement top line (`Revenues` / `RevenuesNetOfInterestExpense`)
+  // NET of interest expense, but the reference site's live Long-Horizon-DCF
+  // growth-seed for these filers tracks the GROSS figure instead — in a
+  // rising-rate environment (2020-2025 Fed hikes) interest expense on
+  // deposits/funding rose alongside gross interest income, so the net-of-
+  // interest tags understate growth by ~2-3x. Verified via SEC company-facts
+  // cross-check: BAC derived 5Y CAGR 15.37% vs reference site's live input
+  // 15.36%; GS derived 18.53% vs reference's 18.52% (both ~0.01pp — no single
+  // existing tag equals this sum for either filer). Ranked ABOVE `Revenues`/
+  // `RevenuesNetOfInterestExpense` below so it overrides their already-full
+  // (8/8) but net-of-interest values; it is empty (and inert) for every
+  // non-bank filer, since these two tags are essentially bank-specific
+  // (30-ticker sweep, task-44, BAC).
+  const grossBankRevenueByYear = annualSumForTags(
+    "InterestAndDividendIncomeOperating",
+    "NoninterestIncome"
+  );
+
+  const revByYear = new Map<number, number>(grossBankRevenueByYear);
+  for (const [fy, v] of annualByYear(revenueTags)) {
+    if (!revByYear.has(fy)) revByYear.set(fy, v);
+  }
   const niByYear = annualByYear([
     "NetIncomeLoss",
     // CAT-style filers stop tagging plain NetIncomeLoss after ~FY2010 and

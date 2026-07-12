@@ -166,6 +166,47 @@ test("extractGrowthHistory: GS-style bank revenue tag (net of interest expense) 
   expect(out[0].revenue).toBe(58283);
 });
 
+test("extractGrowthHistory: BAC-style bank filer prefers gross interest+noninterest income over net-of-interest revenue tag", () => {
+  // Bank of America tags its top line `Revenues` NET of interest expense,
+  // but the reference site's live growth-seed for bank filers is computed
+  // from GROSS interest & dividend income + noninterest income (task-44).
+  // The derived sum must win the years it can compute, while years lacking
+  // one of the two underlying tags fall through to `Revenues`.
+  const bacStyle = {
+    facts: {
+      "us-gaap": {
+        Revenues: {
+          units: { USD: [e(2020, 93000), e(2021, 89000), e(2022, 94000)] },
+        },
+        InterestAndDividendIncomeOperating: {
+          units: { USD: [e(2020, 51585), e(2021, 52000)] }, // no 2022 entry
+        },
+        NoninterestIncome: {
+          units: { USD: [e(2020, 42168), e(2021, 43000)] }, // no 2022 entry
+        },
+      },
+    },
+  };
+  const out = extractGrowthHistory(bacStyle);
+  expect(out.map((r) => r.year)).toEqual([2022, 2021, 2020]);
+
+  // 2020/2021: derived gross sum wins over the net-of-interest `Revenues` value.
+  expect(out.find((r) => r.year === 2020)!.revenue).toBe(51585 + 42168);
+  expect(out.find((r) => r.year === 2021)!.revenue).toBe(52000 + 43000);
+
+  // 2022: neither bank tag has data → falls through to `Revenues`.
+  expect(out.find((r) => r.year === 2022)!.revenue).toBe(94000);
+});
+
+test("extractGrowthHistory: non-bank filer is unaffected by the derived gross-bank-revenue tag", () => {
+  // Safety check: a filer with only the ASC-606 tag (no bank-specific tags
+  // at all) must be completely unaffected by the derived-tag addition.
+  const out = extractGrowthHistory(facts);
+  expect(out[0].revenue).toBe(2488);
+  const y2020 = out.find((r) => r.year === 2020)!;
+  expect(y2020.revenue).toBe(1000);
+});
+
 test("extractGrowthHistory: CAT-style common-attributable/ProfitLoss net-income variants are recognized", () => {
   // Caterpillar stops tagging plain NetIncomeLoss after ~FY2010 and reports
   // the common-attributable figure under NetIncomeLossAvailableToCommonStockholdersBasic
