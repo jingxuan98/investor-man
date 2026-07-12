@@ -304,41 +304,171 @@ export async function geminiStream(
       // OK status but no body — a hard error, not something another model's
       // retry fixes (matches the previous behavior).
       if (!res.body) throw new Error(`GEMINI_ERROR_${res.status}`);
-      return { ok: true, value: sseTextStream(res.body) };
+      return { ok: true, value: scrubReasoningLeak(sseTextStream(res.body)) };
     }
   );
 }
 
 // Wraps Gemini's raw SSE byte stream into a plain-text delta stream.
-function sseTextStream(source: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+//
+// Reason: thinking-capable models (and occasionally weaker fallbacks like
+// gemma) mark their internal planning/reasoning parts with `thought: true`
+// on candidates[].content.parts. Those parts are never meant to be shown to
+// the user — concatenating every part indiscriminately (the old behavior)
+// leaked that reasoning into the visible report. Filtering them here is the
+// API-level fix; models that leak reasoning as plain untagged text (gemma has
+// no thought flag) still need the plain-text scrubber below.
+export function sseTextStream(
+  source: ReadableStream<Uint8Array>
+): ReadableStream<Uint8Array> {
   const reader = source.getReader();
   const dec = new TextDecoder();
   const enc = new TextEncoder();
   let buf = "";
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
+      // Reason: a ReadableStream's pull() is only re-invoked by the stream
+      // machinery in response to a NEW external trigger (a consumer read(),
+      // or an enqueue happening concurrently) — not simply because a prior
+      // pull() call returned without enqueueing anything. If a single read()
+      // off the source yields only a partial line, or a message consisting
+      // entirely of a thought-flagged part (now filtered to empty text), a
+      // one-shot pull() that returns empty-handed would silently stall the
+      // stream forever. Loop internally until this call has enqueued
+      // something or the source has ended.
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        let emitted = false;
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") continue;
+          try {
+            const j = JSON.parse(payload);
+            const t =
+              j.candidates?.[0]?.content?.parts
+                ?.filter((p: any) => p?.thought !== true)
+                ?.map((p: any) => p.text ?? "")
+                .join("") ?? "";
+            if (t) {
+              controller.enqueue(enc.encode(t));
+              emitted = true;
+            }
+          } catch {
+            /* partial line, ignore */
+          }
+        }
+        if (emitted) return;
+      }
+    },
+    cancel() {
+      reader.cancel();
+    },
+  });
+}
+
+// --- Plain-text reasoning-leak scrubber -------------------------------------
+// Some fallback models (notably gemma, which has no `thought` flag at all)
+// emit their planning/preamble as ordinary visible text ahead of the actual
+// report — e.g. "Okay, the user wants a deep-dive on..." or a <thinking>
+// block, before the real `# `/`## ` markdown content begins. This is purely
+// cosmetic (the report itself is fine) but looks broken mid-stream and ends
+// up baked into the cache.
+//
+// Strategy: buffer only the first ~DECISION_WINDOW_CHARS of the stream (never
+// the whole response) looking for the first markdown heading line. Once a
+// heading is found — or the window is exhausted, or the stream ends first —
+// decide once:
+//   - a leading <thinking>...</thinking> block is always stripped once its
+//     closing tag is seen;
+//   - otherwise, if there's a heading and the text before it look like a
+//     model thinking out loud (matches REASONING_START_RE) and starts within
+//     the window, strip everything before the heading;
+//   - otherwise pass the buffered text through unchanged — a legitimate
+//     report opening with a normal paragraph must never be eaten.
+// After the decision, every subsequent chunk is passed straight through with
+// zero buffering — this never holds up the rest of the stream.
+const DECISION_WINDOW_CHARS = 800;
+const HEADING_RE = /^#{1,2}[ \t]+\S/m;
+const THINKING_BLOCK_RE = /^\s*<thinking>[\s\S]*?<\/thinking>\s*/i;
+const LEADING_THINKING_TAG_RE = /^\s*<thinking>/i;
+const REASONING_START_RE =
+  /^\s*(okay|ok|alright|sure|got it|hmm|let me|let's|let us|i need to|i'll|i will|i should|i must|the user wants|the user is asking|the user has asked|first,? let me|first,? i)\b/i;
+
+// Looks at everything buffered so far and either returns a final decision
+// (the text to emit, scrubbed or not) or `null` when more data is needed
+// before a decision can be made.
+function decideScrub(buf: string): string | null {
+  const thinkingBlock = THINKING_BLOCK_RE.exec(buf);
+  if (thinkingBlock) return buf.slice(thinkingBlock[0].length);
+  // A <thinking> tag has opened but its closing tag hasn't arrived yet —
+  // keep buffering (bounded by the window check below) rather than
+  // prematurely deciding this isn't a thinking block.
+  if (LEADING_THINKING_TAG_RE.test(buf) && buf.length < DECISION_WINDOW_CHARS) {
+    return null;
+  }
+
+  const heading = HEADING_RE.exec(buf);
+  if (heading) {
+    const idx = heading.index;
+    const preamble = buf.slice(0, idx);
+    if (idx > 0 && idx <= DECISION_WINDOW_CHARS && REASONING_START_RE.test(preamble.trim())) {
+      return buf.slice(idx);
+    }
+    return buf; // no preamble, or preamble doesn't look like reasoning — pass through
+  }
+
+  if (buf.length >= DECISION_WINDOW_CHARS) return buf; // no heading in the window — pass through
+  return null; // keep buffering
+}
+
+export function scrubReasoningLeak(
+  source: ReadableStream<Uint8Array>
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  const dec = new TextDecoder();
+  const enc = new TextEncoder();
+  let buf = "";
+  let decided = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (decided) {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
         return;
       }
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const payload = line.slice(6).trim();
-        if (payload === "[DONE]") continue;
-        try {
-          const j = JSON.parse(payload);
-          const t =
-            j.candidates?.[0]?.content?.parts
-              ?.map((p: any) => p.text ?? "")
-              .join("") ?? "";
-          if (t) controller.enqueue(enc.encode(t));
-        } catch {
-          /* partial line, ignore */
+      // Reason: same pull()-must-not-return-empty-handed constraint as
+      // sseTextStream above — loop internally until a decision is reached
+      // (something enqueued) or the source ends.
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          // Stream ended before a decision point was reached (short
+          // response, no heading) — flush whatever's buffered exactly as
+          // received.
+          if (buf) controller.enqueue(enc.encode(buf));
+          controller.close();
+          return;
         }
+        buf += dec.decode(value, { stream: true });
+        const result = decideScrub(buf);
+        if (result !== null) {
+          decided = true;
+          if (result) controller.enqueue(enc.encode(result));
+          return;
+        }
+        // else: not enough data yet to decide — keep reading.
       }
     },
     cancel() {

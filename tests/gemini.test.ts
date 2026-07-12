@@ -5,6 +5,8 @@ import {
   GEMINI_REQUEST_BUDGET_MS,
   modelChain,
   parseCompetitors,
+  sseTextStream,
+  scrubReasoningLeak,
 } from "@/lib/ai/gemini";
 
 test("parseCompetitors validates, uppercases, dedupes, caps at 5", () => {
@@ -335,4 +337,134 @@ test("geminiJSON: module-level cooldown lets the NEXT request skip a just-429'd 
     vi.unstubAllGlobals();
     vi.useRealTimers();
   }
+});
+
+// --- Reasoning-leak scrubbing (cosmetic streaming bug, task-47) ------------
+// Fallback models (esp. gemma, which has no `thought` flag) occasionally leak
+// internal planning/preamble as visible text ahead of the actual report.
+
+function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  let i = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i < chunks.length) {
+        controller.enqueue(enc.encode(chunks[i++]));
+      } else {
+        controller.close();
+      }
+    },
+  });
+}
+
+async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const dec = new TextDecoder();
+  let out = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    out += dec.decode(value, { stream: true });
+  }
+  out += dec.decode();
+  return out;
+}
+
+const sseLine = (obj: unknown) => `data: ${JSON.stringify(obj)}\n\n`;
+
+test("sseTextStream: drops parts flagged thought:true, keeps real content", async () => {
+  const chunks = [
+    sseLine({
+      candidates: [
+        {
+          content: {
+            parts: [{ text: "Let me think about how to structure this...", thought: true }],
+          },
+        },
+      ],
+    }),
+    sseLine({
+      candidates: [{ content: { parts: [{ text: "## Report\nReal content." }] } }],
+    }),
+  ];
+  const out = await readAll(sseTextStream(streamFromChunks(chunks)));
+  expect(out).toBe("## Report\nReal content.");
+});
+
+test("sseTextStream: a thought part alongside a real part in the same message keeps only the real one", async () => {
+  const chunks = [
+    sseLine({
+      candidates: [
+        {
+          content: {
+            parts: [
+              { text: "Planning the response structure.", thought: true },
+              { text: "## Overview\nSolid fundamentals." },
+            ],
+          },
+        },
+      ],
+    }),
+  ];
+  const out = await readAll(sseTextStream(streamFromChunks(chunks)));
+  expect(out).toBe("## Overview\nSolid fundamentals.");
+});
+
+test("scrubReasoningLeak: strips an 'Okay, the user wants...' preamble before a heading", async () => {
+  const text =
+    "Okay, the user wants a deep-dive report on this company's fundamentals and valuation.\n\n## Overview\nThe company is solid.";
+  const out = await readAll(scrubReasoningLeak(streamFromChunks([text])));
+  expect(out).toBe("## Overview\nThe company is solid.");
+});
+
+test("scrubReasoningLeak: a legit report opening with a plain paragraph passes through untouched", async () => {
+  const text =
+    "This company represents a compelling investment opportunity in a growing sector.\n\n## Overview\nDetails here.";
+  const out = await readAll(scrubReasoningLeak(streamFromChunks([text])));
+  expect(out).toBe(text);
+});
+
+test("scrubReasoningLeak: strips a <thinking>...</thinking> block", async () => {
+  const text =
+    "<thinking>\nInternal reasoning that should never be shown to the user.\n</thinking>\n\n## Overview\nReal content.";
+  const out = await readAll(scrubReasoningLeak(streamFromChunks([text])));
+  expect(out).toBe("## Overview\nReal content.");
+});
+
+test("scrubReasoningLeak: handles the preamble split across chunk boundaries mid-pattern", async () => {
+  const full =
+    "Okay, let me think through the filings and figures first before writing.\n\n## Overview\nSolid fundamentals.";
+  // Split mid-word ("Ok" | "ay, let me thi" | "nk through...") to exercise
+  // buffering across pull() calls rather than one clean chunk.
+  const c1 = full.slice(0, 2);
+  const c2 = full.slice(2, 30);
+  const c3 = full.slice(30);
+  const out = await readAll(scrubReasoningLeak(streamFromChunks([c1, c2, c3])));
+  expect(out).toBe("## Overview\nSolid fundamentals.");
+});
+
+test("scrubReasoningLeak: a <thinking> block split across chunks is still stripped", async () => {
+  const full =
+    "<thinking>step one, step two, step three of the analysis</thinking>\n\n## Overview\nReal content.";
+  const c1 = full.slice(0, 15);
+  const c2 = full.slice(15, 50);
+  const c3 = full.slice(50);
+  const out = await readAll(scrubReasoningLeak(streamFromChunks([c1, c2, c3])));
+  expect(out).toBe("## Overview\nReal content.");
+});
+
+const DECISION_WINDOW_TEST_THRESHOLD = 800;
+
+test("scrubReasoningLeak: a heading appearing after the ~800-char window is not stripped even with reasoning-looking preamble", async () => {
+  const filler = "Alright ".repeat(120); // > 800 chars, no heading in it
+  const text = "Okay, " + filler + "\n\n## Overview\nReal content.";
+  expect(text.indexOf("## Overview")).toBeGreaterThan(DECISION_WINDOW_TEST_THRESHOLD);
+  const out = await readAll(scrubReasoningLeak(streamFromChunks([text])));
+  expect(out).toBe(text);
+});
+
+test("scrubReasoningLeak: a short legit response with no heading at all passes through untouched", async () => {
+  const text = "Net income grew 12% year over year on stronger margins.";
+  const out = await readAll(scrubReasoningLeak(streamFromChunks([text])));
+  expect(out).toBe(text);
 });
