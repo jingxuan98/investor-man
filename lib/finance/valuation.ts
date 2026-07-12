@@ -273,44 +273,22 @@ function multipleModel(
 
 // ---- main -----------------------------------------------------------------
 
-export function computeValuation(
+// The two horizons buildModels actually walks the engine for — "current" and
+// the one-fiscal-year-forward point. q1/q2 (below) are never passed in here;
+// they're derived by interpolating between these two endpoint runs instead.
+type EndpointHorizon = "current" | "nextYear";
+
+// Builds all 10 models for one endpoint horizon. Split out of
+// computeValuation so the q1/q2 quarterly horizons (see interpolateModel) can
+// run this exactly twice per render — once per endpoint — and derive the
+// quarter points by interpolation, instead of re-walking the engine 4 times.
+function buildModels(
   s: FinancialSnapshot,
-  overrides: Partial<Assumptions> = {},
-  variant: ValuationVariant = "calibrated",
-  horizon: Horizon = "current"
-): ValuationOutput {
-  const a = resolveAssumptions(s, overrides, variant);
-
-  // Guard: a valid ticker whose financial statements were unavailable yields an
-  // empty `years` array. Every model below dereferences latest(s) === years[0],
-  // so short-circuit here and report all 10 models as uniformly n/a. Assumptions
-  // still resolve (autoNormalGrowth/autoWacc read no year data), the composite is
-  // null, and — critically — PEG is null too: with no history there is nothing to
-  // justify a growth figure, so it must not fall back to the auto default.
-  if (s.years.length === 0) {
-    const NA = "n/a — no financial statements available";
-    const models: ModelResult[] = [
-      { key: "dcf20", name: "DCF-20", variant: "20Y · Operating CF", value: null, note: NA },
-      { key: "dfcf20", name: "DFCF-20", variant: "20Y · Free CF", value: null, note: NA },
-      { key: "dni20", name: "DNI-20", variant: "20Y · Net Income", value: null, note: NA },
-      { key: "hmodel", name: "H-Model DCF", variant: "Intrinsic", value: null, note: NA },
-      { key: "evEbitda", name: "EV / EBITDA", variant: "Multiples", value: null, note: NA },
-      { key: "evRevenue", name: "EV / Revenue", variant: "Multiples", value: null, note: NA },
-      { key: "pFcf", name: "P / FCF", variant: "Multiples", value: null, note: NA },
-      { key: "revDcf", name: "Revenue DCF", variant: "Growth", value: null, note: NA },
-      { key: "peg", name: "PEG-implied", variant: "Growth", value: null, note: NA },
-      { key: "graham", name: "Graham Revised", variant: "EPS × growth", value: null, note: NA },
-    ];
-    return {
-      models,
-      composite: null,
-      range: null,
-      assumptions: a,
-      autoNormalGrowth: autoNormalGrowth(s, variant),
-      autoWacc: autoWacc(s, variant),
-    };
-  }
-
+  overrides: Partial<Assumptions>,
+  a: Assumptions,
+  variant: ValuationVariant,
+  horizon: EndpointHorizon
+): ModelResult[] {
   const y = latest(s);
   const models: ModelResult[] = [];
   // Reason: the "variant" param name would shadow the outer computeValuation
@@ -465,6 +443,79 @@ export function computeValuation(
         value: (eps1 * (8.5 + 2 * g100) * 4.4) / Y,
       });
     }
+  }
+
+  return models;
+}
+
+// Geometric interpolation between the two exact endpoints (today's value and
+// the 1-year-forward value) at fraction f (0.25 for q1/3-mo, 0.5 for
+// q2/6-mo): V(q) = Vcur * (Vnext/Vcur)^f — the constant-rate-accretion path
+// between the two points. Exact for the multiples/PEG/Graham family (equals
+// metric*(1+g)^f) and a correct first-order roll for the DCF/H-model family.
+// ponytail: this is geometric interpolation between two pre-computed
+// endpoints, not a true fractional-year path shift through the engine —
+// upgrade to a real fractional path shift (re-deriving growthPath/advance for
+// a partial year) if anyone cares enough to justify the added complexity.
+function interpolateModel(cur: ModelResult, next: ModelResult, f: number): ModelResult {
+  const v = cur.value;
+  const n = next.value;
+  // Only interpolate when both endpoints are valid AND strictly positive —
+  // a non-positive endpoint makes the ratio undefined/meaningless, so the
+  // quarterly value is null rather than guessing.
+  const value = v !== null && n !== null && v > 0 && n > 0 ? v * Math.pow(n / v, f) : null;
+  const note = value !== null ? undefined : cur.note ?? next.note ?? "n/a — endpoint unavailable";
+  return { ...cur, value, note };
+}
+
+export function computeValuation(
+  s: FinancialSnapshot,
+  overrides: Partial<Assumptions> = {},
+  variant: ValuationVariant = "calibrated",
+  horizon: Horizon = "current"
+): ValuationOutput {
+  const a = resolveAssumptions(s, overrides, variant);
+
+  // Guard: a valid ticker whose financial statements were unavailable yields an
+  // empty `years` array. Every model below dereferences latest(s) === years[0],
+  // so short-circuit here and report all 10 models as uniformly n/a. Assumptions
+  // still resolve (autoNormalGrowth/autoWacc read no year data), the composite is
+  // null, and — critically — PEG is null too: with no history there is nothing to
+  // justify a growth figure, so it must not fall back to the auto default.
+  if (s.years.length === 0) {
+    const NA = "n/a — no financial statements available";
+    const models: ModelResult[] = [
+      { key: "dcf20", name: "DCF-20", variant: "20Y · Operating CF", value: null, note: NA },
+      { key: "dfcf20", name: "DFCF-20", variant: "20Y · Free CF", value: null, note: NA },
+      { key: "dni20", name: "DNI-20", variant: "20Y · Net Income", value: null, note: NA },
+      { key: "hmodel", name: "H-Model DCF", variant: "Intrinsic", value: null, note: NA },
+      { key: "evEbitda", name: "EV / EBITDA", variant: "Multiples", value: null, note: NA },
+      { key: "evRevenue", name: "EV / Revenue", variant: "Multiples", value: null, note: NA },
+      { key: "pFcf", name: "P / FCF", variant: "Multiples", value: null, note: NA },
+      { key: "revDcf", name: "Revenue DCF", variant: "Growth", value: null, note: NA },
+      { key: "peg", name: "PEG-implied", variant: "Growth", value: null, note: NA },
+      { key: "graham", name: "Graham Revised", variant: "EPS × growth", value: null, note: NA },
+    ];
+    return {
+      models,
+      composite: null,
+      range: null,
+      assumptions: a,
+      autoNormalGrowth: autoNormalGrowth(s, variant),
+      autoWacc: autoWacc(s, variant),
+    };
+  }
+
+  // "current"/"nextYear" walk the engine directly, once; "q1"/"q2" build both
+  // endpoints once each (never 4 engine runs per render) and interpolate.
+  let models: ModelResult[];
+  if (horizon === "q1" || horizon === "q2") {
+    const f = horizon === "q1" ? 0.25 : 0.5;
+    const cur = buildModels(s, overrides, a, variant, "current");
+    const next = buildModels(s, overrides, a, variant, "nextYear");
+    models = cur.map((m, i) => interpolateModel(m, next[i], f));
+  } else {
+    models = buildModels(s, overrides, a, variant, horizon);
   }
 
   // Composite: trimmed mean (drop single min & max), needs >= 5 valid

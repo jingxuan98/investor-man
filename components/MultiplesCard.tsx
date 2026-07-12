@@ -35,7 +35,10 @@ export default function MultiplesCard({ snapshot }: { snapshot: FinancialSnapsho
 
   return (
     <div className="card overflow-hidden">
-      <table className="w-full text-sm">
+      {/* overflow-x-auto + min-w-max so this wide table scrolls within the
+          card on narrow viewports instead of clipping/squishing. */}
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-max text-sm">
         <thead className="bg-page text-left text-[11px] text-ink2">
           <tr>
             <th className="px-4 py-2 font-medium uppercase tracking-wide">Multiple</th>
@@ -82,6 +85,7 @@ export default function MultiplesCard({ snapshot }: { snapshot: FinancialSnapsho
           ))}
         </tbody>
       </table>
+      </div>
       <p className="border-t border-line bg-page px-4 py-2 text-xs text-ink2">
         Own 5Y median from the company&apos;s own trading history; sector median is a fixed
         lookup table by sector. Implied price shown in parentheses. n/a when the underlying

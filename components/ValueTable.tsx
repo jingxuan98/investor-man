@@ -134,11 +134,45 @@ function VariantButton({
 
 const HORIZON_LABEL: Record<Horizon, string> = {
   current: "Today",
-  nextYear: "In 1 Year",
+  q1: "1Q",
+  q2: "2Q",
+  nextYear: "1Y",
 };
 
-const HORIZON_TOOLTIP =
-  "Rolls every model forward one fiscal year: cash flows grow one year along the assumed path, multiples apply to next year's metrics. Debt, cash and multiples held constant.";
+const HORIZON_TOOLTIP: Record<Horizon, string> = {
+  current: "Today's implied value from each method, using today's cash flows and metrics.",
+  q1:
+    "3 months forward: a geometrically-interpolated point 1/4 of the way along the path from today's value to the 1-year-forward value (constant-rate accretion, not a full re-projection).",
+  q2:
+    "6 months forward: a geometrically-interpolated point halfway along the path from today's value to the 1-year-forward value (constant-rate accretion, not a full re-projection).",
+  nextYear:
+    "Rolls every model forward one fiscal year: cash flows grow one year along the assumed path, multiples apply to next year's metrics. Debt, cash and multiples held constant.",
+};
+
+const HORIZON_RETURN_LABEL: Record<Horizon, string> = {
+  current: "",
+  q1: "3-mo",
+  q2: "6-mo",
+  nextYear: "1-yr",
+};
+
+// Composite-row label suffix per horizon — "current" gets none.
+const HORIZON_FORWARD_SUFFIX: Record<Horizon, string> = {
+  current: "",
+  q1: " (1Q forward)",
+  q2: " (2Q forward)",
+  nextYear: " (1yr forward)",
+};
+
+// Composite-row explainer's extra sentence per horizon — "current" gets none.
+const HORIZON_EXPLAINER_SUFFIX: Record<Horizon, string> = {
+  current: "",
+  q1: " A 3-month-forward point interpolated along the path to next year's value, not today's value.",
+  q2: " A 6-month-forward point interpolated along the path to next year's value, not today's value.",
+  nextYear: " Every method rolled forward one fiscal year, not today's value.",
+};
+
+const HORIZONS: Horizon[] = ["current", "q1", "q2", "nextYear"];
 
 // Segmented horizon toggle — orthogonal to the variant toggle (above) and the
 // investor-style sub-tabs (below): every combination of variant x style x
@@ -163,7 +197,7 @@ function HorizonButton({
     <button
       type="button"
       aria-pressed={active}
-      aria-label={HORIZON_TOOLTIP}
+      aria-label={HORIZON_TOOLTIP[horizon]}
       className={`group relative tab-btn !px-3 !py-1.5 !text-xs ${active ? "active" : ""}`}
       onClick={onClick}
     >
@@ -172,7 +206,7 @@ function HorizonButton({
         role="tooltip"
         className={`pointer-events-none absolute top-full z-50 mt-1.5 w-72 max-w-[calc(100vw-2rem)] scale-95 whitespace-normal break-words rounded-lg border border-line bg-card p-2.5 text-xs font-normal normal-case leading-snug tracking-normal text-ink3 opacity-0 shadow-lg transition-all duration-150 group-hover:scale-100 group-hover:opacity-100 ${posClass}`}
       >
-        {HORIZON_TOOLTIP}
+        {HORIZON_TOOLTIP[horizon]}
       </span>
     </button>
   );
@@ -334,13 +368,14 @@ export default function ValueTable({
   const styleComp = styleComposite(visibleValid);
   const composite = activeTab === "all" ? out.composite : styleComp.value;
   const compositeMethod = activeTab === "all" ? "trimmed" : styleComp.method;
+  // "current" has no forward-looking suffix; q1/q2/nextYear each get their
+  // own composite-row label suffix per the task brief ("(1Q forward)" etc).
   const compositeLabel =
     (activeTab === "all"
       ? activeVariant === "textbook"
         ? "Textbook Composite"
         : "Composite"
-      : `${TAB_LABEL[activeTab]} composite`) +
-    (activeHorizon === "nextYear" ? " (1yr forward)" : "");
+      : `${TAB_LABEL[activeTab]} composite`) + HORIZON_FORWARD_SUFFIX[activeHorizon];
   const compositeVariant =
     activeTab === "all"
       ? "Trimmed mean"
@@ -377,15 +412,16 @@ export default function ValueTable({
           </div>
           <p className="mt-1 text-xs text-ink2">
             {VARIANT_LABEL[activeVariant]} composite
-            {activeHorizon === "nextYear" ? " (1yr forward)" : ""}
+            {HORIZON_FORWARD_SUFFIX[activeHorizon]}
             {activeHorizon === "current" &&
               compositeUpside !== null &&
               ` · ${compositeUpside >= 0 ? "+" : ""}${(compositeUpside * 100).toFixed(1)}% vs price`}
             {updatedDate && ` · Updated ${updatedDate}`}
           </p>
-          {activeHorizon === "nextYear" && compositeUpside !== null && (
+          {activeHorizon !== "current" && compositeUpside !== null && (
             <p className={`mt-0.5 text-xs font-medium ${compositeUpside >= 0 ? "text-green" : "text-red"}`}>
-              Implied 1-yr return vs today&apos;s price: {compositeUpside >= 0 ? "+" : ""}
+              Implied {HORIZON_RETURN_LABEL[activeHorizon]} return vs today&apos;s price:{" "}
+              {compositeUpside >= 0 ? "+" : ""}
               {(compositeUpside * 100).toFixed(1)}%
             </p>
           )}
@@ -406,18 +442,22 @@ export default function ValueTable({
             />
           </div>
           <div className="flex gap-1" role="group" aria-label="Valuation horizon">
-            <HorizonButton
-              horizon="current"
-              active={activeHorizon === "current"}
-              align="left"
-              onClick={() => setActiveHorizon("current")}
-            />
-            <HorizonButton
-              horizon="nextYear"
-              active={activeHorizon === "nextYear"}
-              align="right"
-              onClick={() => setActiveHorizon("nextYear")}
-            />
+            {HORIZONS.map((h, i) => (
+              <HorizonButton
+                key={h}
+                horizon={h}
+                active={activeHorizon === h}
+                // Reason: with 4 compact buttons packed on one row, a "left"
+                // anchor on the right-hand buttons pushed their w-72 tooltip
+                // past the viewport edge on narrow screens — inflating
+                // document.body.scrollWidth into page-level horizontal
+                // scroll (this control isn't wrapped by any overflow-hidden
+                // card, unlike the tables). Right half of the row opens its
+                // tooltip toward the left instead, staying on-screen.
+                align={i >= HORIZONS.length / 2 ? "right" : "left"}
+                onClick={() => setActiveHorizon(h)}
+              />
+            ))}
           </div>
         </div>
       </div>
@@ -451,7 +491,11 @@ export default function ValueTable({
       </div>
 
       <section className="card overflow-hidden">
-        <table className="w-full text-sm">
+        {/* Wide 10-method table clips on narrow viewports without this —
+            min-w-max keeps the table at its natural content width so this
+            div scrolls horizontally instead of squishing columns. */}
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-max text-sm">
           <thead className="bg-page text-left text-[11px] text-ink2">
             <tr>
               <th className="px-4 py-2 font-medium uppercase tracking-wide">Method</th>
@@ -492,8 +536,7 @@ export default function ValueTable({
                 <span className="font-semibold text-accent">{compositeLabel}</span>
                 <p className="mt-0.5 max-w-xs text-xs font-normal leading-snug text-ink2">
                   {COMPOSITE_EXPLAINER}
-                  {activeHorizon === "nextYear" &&
-                    " Every method rolled forward one fiscal year, not today's value."}
+                  {HORIZON_EXPLAINER_SUFFIX[activeHorizon]}
                 </p>
               </td>
               <td className="px-4 py-3 text-ink2">{compositeVariant}</td>
@@ -512,6 +555,7 @@ export default function ValueTable({
             </tr>
           </tbody>
         </table>
+        </div>
         <p className="border-t border-line bg-page px-4 py-2 text-xs text-ink2">
           {visibleValid.length} of {visibleModels.length} methods · range {rangeText}
         </p>

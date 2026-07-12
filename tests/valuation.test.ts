@@ -388,3 +388,53 @@ test("existing current-horizon tests are unaffected (regression, ZERO_G calibrat
   expect(model(out, "dcf20").value!).toBeCloseTo(23.540691159275674, 6);
   expect(model(out, "hmodel").value!).toBeCloseTo(25, 6);
 });
+
+// --- quarterly horizons (q1/q2) ----------------------------------------------
+// Geometric interpolation between the current/nextYear endpoints:
+// V(q) = Vcurrent * (Vnext/Vcurrent)^f, f = 0.25 (q1) or 0.5 (q2).
+
+test("q1 P/FCF == current x (1 + seed growth)^0.25 exactly", () => {
+  const overrides = { normalGrowth: 0.2, terminalGrowth: 0.04, wacc: 0.1, marginExpansion: 0, hHalfLife: 4 };
+  const current = computeValuation(FIX, overrides, "calibrated", "current");
+  const q1 = computeValuation(FIX, overrides, "calibrated", "q1");
+  const curVal = model(current, "pFcf").value!;
+  const q1Val = model(q1, "pFcf").value!;
+  // P/FCF's nextYear == current * 1.2 exactly (see the existing nextYear test
+  // above), so q1's geometric interpolation reduces to current * 1.2^0.25.
+  expect(q1Val).toBeCloseTo(curVal * Math.pow(1.2, 0.25), 10);
+});
+
+test("q2 of dcf20 == geometric mean of current and nextYear", () => {
+  const overrides = { normalGrowth: 0.1, terminalGrowth: 0.04, wacc: 0.1, marginExpansion: 0, hHalfLife: 4 };
+  const current = computeValuation(FIX, overrides, "calibrated", "current");
+  const nextYear = computeValuation(FIX, overrides, "calibrated", "nextYear");
+  const q2 = computeValuation(FIX, overrides, "calibrated", "q2");
+  const curVal = model(current, "dcf20").value!;
+  const nextVal = model(nextYear, "dcf20").value!;
+  const q2Val = model(q2, "dcf20").value!;
+  expect(q2Val).toBeCloseTo(Math.sqrt(curVal * nextVal), 6);
+});
+
+test("monotonic for a growing fixture: current < q1 < q2 < nextYear (composite)", () => {
+  const overrides = { normalGrowth: 0.1, terminalGrowth: 0.04, wacc: 0.1, marginExpansion: 0, hHalfLife: 4 };
+  const current = computeValuation(FIX, overrides, "calibrated", "current").composite!;
+  const q1 = computeValuation(FIX, overrides, "calibrated", "q1").composite!;
+  const q2 = computeValuation(FIX, overrides, "calibrated", "q2").composite!;
+  const nextYear = computeValuation(FIX, overrides, "calibrated", "nextYear").composite!;
+  expect(current).not.toBeNull();
+  expect(current).toBeLessThan(q1);
+  expect(q1).toBeLessThan(q2);
+  expect(q2).toBeLessThan(nextYear);
+});
+
+test("null endpoint => null quarterly value (wacc=0 nulls the DCF family at both endpoints)", () => {
+  const overrides = { normalGrowth: 0.1, terminalGrowth: 0.04, wacc: 0, marginExpansion: 0, hHalfLife: 4 };
+  const current = computeValuation(FIX, overrides, "calibrated", "current");
+  const nextYear = computeValuation(FIX, overrides, "calibrated", "nextYear");
+  expect(model(current, "dcf20").value).toBeNull();
+  expect(model(nextYear, "dcf20").value).toBeNull();
+  const q1 = computeValuation(FIX, overrides, "calibrated", "q1");
+  const q2 = computeValuation(FIX, overrides, "calibrated", "q2");
+  expect(model(q1, "dcf20").value).toBeNull();
+  expect(model(q2, "dcf20").value).toBeNull();
+});

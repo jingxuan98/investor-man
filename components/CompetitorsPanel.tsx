@@ -119,7 +119,10 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
 
   return (
     <div className="card overflow-hidden">
-      <table className="w-full text-sm">
+      {/* overflow-x-auto + min-w-max so this wide table scrolls within the
+          card on narrow viewports instead of clipping/squishing. */}
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-max text-sm">
         <thead className="bg-page text-left text-ink2">
           <tr>
             <th className="px-4 py-2 text-[11px] font-medium uppercase tracking-wide">Company</th>
@@ -174,6 +177,7 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
           })}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

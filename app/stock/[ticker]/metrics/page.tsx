@@ -144,7 +144,7 @@ export default async function MetricsPage({
       </section>
 
       <section className="card overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-max text-sm">
           <thead className="bg-page text-left text-[11px] text-ink2">
             <tr>
               <th className="px-4 py-2 font-medium uppercase tracking-wide">Metric</th>
