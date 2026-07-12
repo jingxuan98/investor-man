@@ -86,6 +86,11 @@ export default function CompetitorsPanel({
   const [transient, setTransient] = useState(false);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [rows, setRows] = useState<Record<string, RowState>>({});
+  // Set only when /api/competitors fell back to the Gemini path (Yahoo's
+  // "similar stocks" is the primary, un-badged source — see the route's
+  // comment). Names which model produced the list, so this one AI-touched
+  // path in an otherwise Yahoo-sourced panel says so.
+  const [geminiModel, setGeminiModel] = useState<string | null>(null);
   // Monotonic token for the latest effect run. A StrictMode remount (or a
   // ticker change) bumps it, retiring older runs: their setStates are skipped
   // while the fresh run proceeds. Unlike a cleanup-set `cancelled` flag, a
@@ -101,6 +106,7 @@ export default function CompetitorsPanel({
     setTransient(false);
     setCompetitors([]);
     setRows({});
+    setGeminiModel(null);
 
     (async () => {
       let list: Competitor[];
@@ -116,6 +122,9 @@ export default function CompetitorsPanel({
         }
         const data = await res.json();
         list = Array.isArray(data.competitors) ? data.competitors : [];
+        // Present only when the route fell back to Gemini (see the route's
+        // comment) — Yahoo's response never carries a `model` field.
+        if (active() && typeof data.model === "string") setGeminiModel(data.model);
       } catch {
         if (active()) setListState("error");
         return;
@@ -319,6 +328,11 @@ export default function CompetitorsPanel({
         </tfoot>
       </table>
       </div>
+      {geminiModel && (
+        <p className="px-4 py-2 text-xs text-ink2">
+          Competitor list via Gemini fallback (Yahoo unavailable) · model: {geminiModel}
+        </p>
+      )}
     </div>
   );
 }

@@ -117,6 +117,14 @@ interface Failure {
 // runner: a usable value, or "unusable output — try the next model".
 type ConsumeResult<T> = { ok: true; value: T } | { ok: false };
 
+// Result of a successful chain run: the value plus which model in the chain
+// actually produced it — callers surface this for model-attribution (the
+// "which model served this" badge shown on every AI output surface).
+export interface ChainResult<T> {
+  value: T;
+  model: string;
+}
+
 // The shared two-pass chain runner (see the strategy comment above). Hard
 // errors — non-retryable non-OK statuses like 400/403, or anything `consume`
 // throws — abort the whole chain immediately: no other model can fix those.
@@ -124,7 +132,7 @@ async function runModelChain<T>(
   models: string[],
   doFetch: (model: string) => Promise<Response>,
   consume: (res: Response, model: string) => Promise<ConsumeResult<T>>
-): Promise<T> {
+): Promise<ChainResult<T>> {
   const deadline = Date.now() + GEMINI_REQUEST_BUDGET_MS;
   const failures = new Map<string, Failure>();
   // Reason: an append-only log (rather than a `let lastFailure` mutated from
@@ -192,7 +200,7 @@ async function runModelChain<T>(
       await sleep(Math.min(SPRINT_GAP_MS, Math.max(deadline - Date.now(), 0)));
     }
     const out = await attempt(model);
-    if (out.ok) return out.value;
+    if (out.ok) return { value: out.value, model };
     // Courtesy gap only after an actual transient failure — a parse failure
     // didn't rate-limit anything, so the next model needs no pacing.
     gapNeeded = failures.get(model)?.kind === "transient";
@@ -219,7 +227,7 @@ async function runModelChain<T>(
             : OTHER_RETRY_WAIT_MS;
       await sleep(Math.min(wait, remaining));
       const out = await attempt(model);
-      if (out.ok) return out.value;
+      if (out.ok) return { value: out.value, model };
     }
   }
 
@@ -234,7 +242,10 @@ async function runModelChain<T>(
   throw new Error("RATE_LIMITED");
 }
 
-export async function geminiJSON<T>(prompt: string, apiKey?: string): Promise<T> {
+export async function geminiJSON<T>(
+  prompt: string,
+  apiKey?: string
+): Promise<ChainResult<T>> {
   const { key, models } = cfg(apiKey);
   return runModelChain<T>(
     models,
@@ -271,7 +282,7 @@ export async function geminiJSON<T>(prompt: string, apiKey?: string): Promise<T>
 export async function geminiStream(
   prompt: string,
   opts: { grounding?: boolean; apiKey?: string } = {}
-): Promise<ReadableStream<Uint8Array>> {
+): Promise<ChainResult<ReadableStream<Uint8Array>>> {
   const { key, models } = cfg(opts.apiKey);
   return runModelChain<ReadableStream<Uint8Array>>(
     models,

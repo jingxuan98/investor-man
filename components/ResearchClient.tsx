@@ -5,9 +5,18 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { geminiHeaders, GEMINI_KEY_STORAGE_KEY } from "@/lib/geminiKeyHeader";
 import { exportReportPdf } from "@/lib/exportPdf";
+import { formatModelCaption } from "@/lib/modelCaption";
+import ModelCaption from "@/components/ModelCaption";
 import { useVariant } from "@/components/VariantProvider";
 
-type ReportType = "research" | "model3" | "bear" | "bull" | "risks" | "deepdive";
+type ReportType =
+  | "research"
+  | "model3"
+  | "bear"
+  | "bull"
+  | "risks"
+  | "deepdive"
+  | "playbook";
 
 const REPORTS: { type: ReportType; label: string; desc: string }[] = [
   {
@@ -40,6 +49,11 @@ const REPORTS: { type: ReportType; label: string; desc: string }[] = [
     label: "Valuation Deep-Dive",
     desc: "Walks our 10 valuation methods, which to trust for this business, and a growth/discount-rate sensitivity table.",
   },
+  {
+    type: "playbook",
+    label: "The Playbook",
+    desc: "Catalysts, scenarios, risks & what the market believes.",
+  },
 ];
 
 const NO_KEY_HINT =
@@ -57,6 +71,11 @@ export default function ResearchClient({
   const [streaming, setStreaming] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Model attribution: which chain model actually served this response (from
+  // the X-Model-Used response header — see app/api/research/route.ts), and
+  // whether it was served from cache (X-Cache: HIT). Reset per run.
+  const [model, setModel] = useState<string | null>(null);
+  const [cached, setCached] = useState(false);
   // Whether a browser (BYO) key is present in localStorage. Checked once on
   // mount (client-only — the server has no visibility into localStorage) so
   // we can show a friendly inline hint when NEITHER the server env key nor a
@@ -83,7 +102,11 @@ export default function ResearchClient({
     setPdfNote(null);
     if (!reportRef.current) return;
     const label = REPORTS.find((r) => r.type === active)?.label ?? "AI Research Report";
-    const ok = exportReportPdf(`${ticker} — ${label}`, reportRef.current.innerHTML);
+    const ok = exportReportPdf(
+      `${ticker} — ${label}`,
+      reportRef.current.innerHTML,
+      formatModelCaption(model, cached) ?? undefined
+    );
     if (!ok) setPdfNote("Your browser blocked the popup — allow popups for this site to export.");
   }
 
@@ -96,6 +119,8 @@ export default function ResearchClient({
     setError(null);
     setDone(false);
     setStreaming(true);
+    setModel(null);
+    setCached(false);
 
     try {
       const res = await fetch("/api/research", {
@@ -103,6 +128,15 @@ export default function ResearchClient({
         headers: { "Content-Type": "application/json", ...geminiHeaders() },
         body: JSON.stringify({ ticker, type, force, variant }),
       });
+
+      // Model attribution: read the headers as soon as the response arrives
+      // (they're available before the streamed body finishes), regardless of
+      // ok/not-ok — a non-200 response carries no model header, so this is a
+      // no-op there.
+      if (active()) {
+        setModel(res.headers.get("X-Model-Used"));
+        setCached(res.headers.get("X-Cache") === "HIT");
+      }
 
       // Handle non-200 BEFORE reading the body as a stream: error responses
       // are JSON, not the plain-text report stream.
@@ -199,6 +233,7 @@ export default function ResearchClient({
 
       {active && !error && (
         <div className="card p-6">
+          <ModelCaption model={model} cached={cached} />
           {streaming && text === "" && (
             <p className="text-sm text-ink2">
               Generating — can take a minute or two when free-tier models are busy…

@@ -13,7 +13,7 @@ function bundle(): StockBundle {
   return { snapshot: FIX, valuation, quality, gate };
 }
 
-test("isReportType guards the seven valid types", () => {
+test("isReportType guards the eight valid types", () => {
   expect(isReportType("research")).toBe(true);
   expect(isReportType("model3")).toBe(true);
   expect(isReportType("bear")).toBe(true);
@@ -21,13 +21,23 @@ test("isReportType guards the seven valid types", () => {
   expect(isReportType("risks")).toBe(true);
   expect(isReportType("deepdive")).toBe(true);
   expect(isReportType("story")).toBe(true);
+  expect(isReportType("playbook")).toBe(true);
   expect(isReportType("summary")).toBe(false);
   expect(isReportType(42)).toBe(false);
   expect(isReportType(undefined)).toBe(false);
 });
 
 test("every prompt embeds the verified data block and markdown instruction", () => {
-  for (const type of ["research", "model3", "bear", "bull", "risks", "deepdive", "story"] as const) {
+  for (const type of [
+    "research",
+    "model3",
+    "bear",
+    "bull",
+    "risks",
+    "deepdive",
+    "story",
+    "playbook",
+  ] as const) {
     const { prompt } = buildPrompt(type, bundle());
     // data block: name, ticker, and a historical revenue figure present
     expect(prompt).toContain("VERIFIED FINANCIAL DATA for Test Corp (TEST)");
@@ -46,6 +56,8 @@ test("grounding flags per type", () => {
   expect(buildPrompt("deepdive", bundle()).grounding).toBe(false);
   // story grounds: BLOCK 2B asks for current market narratives
   expect(buildPrompt("story", bundle()).grounding).toBe(true);
+  // playbook grounds: catalyst calendar + market narrative both need search
+  expect(buildPrompt("playbook", bundle()).grounding).toBe(true);
 });
 
 test("bull prompt injects the live price like bear does", () => {
@@ -129,11 +141,38 @@ test("bear case injects the live price, model3 cites Yahoo, no hardcoded refs", 
   expect(bear).toContain("bear case on Test Corp (TEST) at 40");
   expect(bear).toContain("% downside from 40");
   // no leftover source-company references
-  for (const p of ["research", "model3", "bear", "bull", "risks", "deepdive"] as const) {
+  for (const p of ["research", "model3", "bear", "bull", "risks", "deepdive", "playbook"] as const) {
     const txt = buildPrompt(p, b).prompt;
     expect(txt).not.toMatch(/reddit|RDDT|Apple|AAPL/i);
   }
   const model3 = buildPrompt("model3", b).prompt;
   expect(model3).toContain("company filings via Yahoo Finance");
   expect(model3).not.toContain("SEC");
+});
+
+test("playbook prompt has all four sections, injects the live price, and anchors targets to our methods", () => {
+  const b = bundle();
+  const playbook = buildPrompt("playbook", b).prompt;
+  expect(playbook).toContain("## CATALYST CALENDAR");
+  expect(playbook).toContain("## SCENARIO ANALYSIS");
+  expect(playbook).toContain("## KEY RISKS");
+  expect(playbook).toContain("## MARKET NARRATIVE");
+  // live price injected (FIX price is 40, per the bear/bull tests above)
+  expect(playbook).toContain("Playbook\" for Test Corp (TEST) at 40");
+  expect(playbook).toContain("show the math from 40 to the target");
+  // anchored to OUR methods table, not an invented multiple
+  expect(playbook).toContain("OUR 10 VALUATION METHODS");
+  expect(playbook).toMatch(/DCF-20: -?\d/);
+  expect(playbook).toContain("do NOT invent a new multiple");
+  // probabilities must sum to 100%, bear/bull framed as genuine/achievable
+  expect(playbook).toContain("must sum to 100%");
+  expect(playbook).toContain("genuine downside risk");
+  expect(playbook).toContain("achievable, not fantasy");
+  // risks section reuses Marks's permanent-capital-loss framing, shortened
+  expect(playbook).toContain("permanent capital loss");
+  expect(playbook).toContain("Watch metric");
+  // market narrative covers bull/bear + the unwind path
+  expect(playbook).toContain("bulls have been saying recently");
+  expect(playbook).toContain("bears have been saying recently");
+  expect(playbook).toContain("If the thesis breaks");
 });

@@ -36,7 +36,7 @@ export async function GET(
   // BYO key: see app/api/research/route.ts for the header contract.
   const apiKey = req.headers.get("x-gemini-key")?.trim() || undefined;
   try {
-    const raw = await geminiJSON<unknown>(
+    const { value: raw, model } = await geminiJSON<unknown>(
       `List the 5 closest publicly listed competitors of the US-listed stock ${T}. ` +
         `US-listed tickers only. Respond ONLY with a JSON array: ` +
         `[{"ticker": "XXX", "name": "Company Name"}]. Do not include ${T} itself.`,
@@ -44,8 +44,15 @@ export async function GET(
     );
     const comps = parseCompetitors(raw);
     // Only cache non-empty lists so a transient bad LLM response is retried.
+    // Note: the cached entry deliberately does NOT store `model` — a cache
+    // hit is served straight from the `hit` branch above (competitors-only,
+    // no model field), so the "served by Gemini" line only ever appears on
+    // the live fallback path that actually just called the model.
     if (comps.length) cacheSet(key, comps, 7 * 24 * 3600);
-    return NextResponse.json({ competitors: comps });
+    // Yahoo is the primary, un-badged source; this branch only runs when
+    // Yahoo failed/was empty, so tell the client which model actually
+    // produced this list — the panel shows a small "via Gemini" line.
+    return NextResponse.json({ competitors: comps, model });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "error";
     if (msg === "RATE_LIMITED") {

@@ -5,6 +5,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { geminiHeaders } from "@/lib/geminiKeyHeader";
 import { exportReportPdf } from "@/lib/exportPdf";
+import { formatModelCaption } from "@/lib/modelCaption";
+import ModelCaption from "@/components/ModelCaption";
 import { useVariant } from "@/components/VariantProvider";
 
 // The Story tab's "Draft with AI" enrichment — a single-button variant of
@@ -24,6 +26,10 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pdfNote, setPdfNote] = useState<string | null>(null);
+  // Model attribution: which chain model actually served this response, and
+  // whether it came from cache — same headers as ResearchClient reads.
+  const [model, setModel] = useState<string | null>(null);
+  const [cached, setCached] = useState(false);
   const draftRef = useRef<HTMLElement>(null);
   // Monotonic run token: a newer run retires older ones so their appends don't
   // interleave into the current draft.
@@ -32,7 +38,11 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
   function handleExportPdf() {
     setPdfNote(null);
     if (!draftRef.current) return;
-    const ok = exportReportPdf(`${ticker} — Story Draft`, draftRef.current.innerHTML);
+    const ok = exportReportPdf(
+      `${ticker} — Story Draft`,
+      draftRef.current.innerHTML,
+      formatModelCaption(model, cached) ?? undefined
+    );
     if (!ok) setPdfNote("Your browser blocked the popup — allow popups for this site to export.");
   }
 
@@ -45,6 +55,8 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
     setError(null);
     setDone(false);
     setStreaming(true);
+    setModel(null);
+    setCached(false);
 
     try {
       const res = await fetch("/api/research", {
@@ -52,6 +64,13 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
         headers: { "Content-Type": "application/json", ...geminiHeaders() },
         body: JSON.stringify({ ticker, type: "story", force, variant }),
       });
+
+      // Model attribution: headers are available as soon as the response
+      // arrives, before the streamed body finishes.
+      if (active()) {
+        setModel(res.headers.get("X-Model-Used"));
+        setCached(res.headers.get("X-Cache") === "HIT");
+      }
 
       // Handle non-200 BEFORE reading the body as a stream: error responses
       // are JSON, not the plain-text draft stream.
@@ -124,6 +143,7 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
 
       {started && !error && (
         <div className="rounded-lg border border-line bg-page p-6">
+          <ModelCaption model={model} cached={cached} />
           {streaming && text === "" && (
             <p className="text-sm text-ink2">
               Generating — can take a minute or two when free-tier models are busy…

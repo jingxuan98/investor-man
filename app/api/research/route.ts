@@ -50,16 +50,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "bad_type" }, { status: 400 });
   }
 
-  // v2: story prompt gained BLOCK 2B (market narratives) — version the key so
-  // drafts cached under the old prompt regenerate instead of serving stale shape.
-  const cacheKey = `research:${ticker}:${type}:${variant}:v2`;
+  // v3: cached value is now {model, text} (was a bare string under v2), so the
+  // model-attribution badge can be served on a cache hit too — bump the key so
+  // v2-era entries (missing the model field) don't get misread as v3 shape.
+  const cacheKey = `research:${ticker}:${type}:${variant}:v3`;
 
-  // Cached hit → return the whole body at once.
+  // Cached hit → return the whole body at once, plus which model produced it.
   if (!force) {
-    const cached = cacheGet<string>(cacheKey);
+    const cached = cacheGet<{ model: string; text: string }>(cacheKey);
     if (cached) {
-      return new Response(cached, {
-        headers: { "Content-Type": "text/plain; charset=utf-8", "X-Cache": "hit" },
+      return new Response(cached.text, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "X-Cache": "HIT",
+          "X-Model-Used": cached.model,
+        },
       });
     }
   }
@@ -80,8 +85,9 @@ export async function POST(req: Request) {
   const { prompt, grounding } = buildPrompt(type, bundleForVariant(bundle, variant));
 
   let stream: ReadableStream<Uint8Array>;
+  let model: string;
   try {
-    stream = await geminiStream(prompt, { grounding, apiKey });
+    ({ value: stream, model } = await geminiStream(prompt, { grounding, apiKey }));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "GEMINI_ERROR";
     if (msg === "RATE_LIMITED") {
@@ -114,11 +120,15 @@ export async function POST(req: Request) {
     flush() {
       full += dec.decode();
       // Reason: never cache an empty result (e.g. grounding produced no text).
-      if (full.trim()) cacheSet(cacheKey, full, TTL_24H);
+      if (full.trim()) cacheSet(cacheKey, { model, text: full }, TTL_24H);
     },
   });
 
   return new Response(stream.pipeThrough(cachingStream), {
-    headers: { "Content-Type": "text/plain; charset=utf-8", "X-Cache": "miss" },
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-Cache": "MISS",
+      "X-Model-Used": model,
+    },
   });
 }

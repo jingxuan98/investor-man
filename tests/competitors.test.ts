@@ -58,22 +58,33 @@ test("Yahoo success: returns Yahoo's list and never calls Gemini", async () => {
     { ticker: "SNAP", name: "Snap Inc" },
   ]);
   expect(geminiJSONMock).not.toHaveBeenCalled();
+  // Yahoo is the un-badged primary source — no model field on this path.
+  expect(data.model).toBeUndefined();
 });
 
-test("Yahoo empty list: falls back to Gemini", async () => {
+test("Yahoo empty list: falls back to Gemini, and the response names the serving model", async () => {
   similarTickersMock.mockResolvedValue([]);
-  geminiJSONMock.mockResolvedValue([{ ticker: "nflx", name: "Netflix" }]);
+  geminiJSONMock.mockResolvedValue({
+    value: [{ ticker: "nflx", name: "Netflix" }],
+    model: "gemini-2.5-flash",
+  });
 
   const res = await GET(req(), ctx());
   const data = await res.json();
 
   expect(geminiJSONMock).toHaveBeenCalledTimes(1);
   expect(data.competitors).toEqual([{ ticker: "NFLX", name: "Netflix" }]);
+  // Model attribution: Yahoo (the un-badged primary source) came up empty, so
+  // the response says which model actually produced this list.
+  expect(data.model).toBe("gemini-2.5-flash");
 });
 
-test("Yahoo throws: falls back to Gemini", async () => {
+test("Yahoo throws: falls back to Gemini, and the response names the serving model", async () => {
   similarTickersMock.mockRejectedValue(new Error("yahoo boom"));
-  geminiJSONMock.mockResolvedValue([{ ticker: "nflx", name: "Netflix" }]);
+  geminiJSONMock.mockResolvedValue({
+    value: [{ ticker: "nflx", name: "Netflix" }],
+    model: "gemini-3.1-flash-lite",
+  });
   vi.spyOn(console, "error").mockImplementation(() => {});
 
   const res = await GET(req(), ctx());
@@ -81,6 +92,7 @@ test("Yahoo throws: falls back to Gemini", async () => {
 
   expect(geminiJSONMock).toHaveBeenCalledTimes(1);
   expect(data.competitors).toEqual([{ ticker: "NFLX", name: "Netflix" }]);
+  expect(data.model).toBe("gemini-3.1-flash-lite");
 });
 
 test("Yahoo success populates the cache so a second request skips Yahoo entirely", async () => {

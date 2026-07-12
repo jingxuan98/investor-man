@@ -114,7 +114,10 @@ test("geminiJSON: malformed JSON from one model falls through to the next", asyn
   vi.stubGlobal("fetch", fetchMock);
   try {
     const result = await geminiJSON<{ ticker: string; name: string }[]>("prompt", "fake-key");
-    expect(result).toEqual([{ ticker: "MSFT", name: "Microsoft" }]);
+    expect(result.value).toEqual([{ ticker: "MSFT", name: "Microsoft" }]);
+    // Model attribution: the FALLBACK model actually served this, not the
+    // primary whose malformed JSON was discarded.
+    expect(result.model).toBe("gemini-3.1-flash-lite");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   } finally {
     vi.unstubAllGlobals();
@@ -181,7 +184,9 @@ test("geminiJSON: sprint pass — a 429 falls straight to the next model (1s cou
   try {
     const promise = geminiJSON<{ ticker: string; name: string }[]>("prompt", "fake-key");
     await vi.runAllTimersAsync();
-    expect(await promise).toEqual([{ ticker: "MSFT", name: "Microsoft" }]);
+    const result = await promise;
+    expect(result.value).toEqual([{ ticker: "MSFT", name: "Microsoft" }]);
+    expect(result.model).toBe("m2");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0][0])).toContain("/m1:");
     expect(String(fetchMock.mock.calls[1][0])).toContain("/m2:");
@@ -211,7 +216,9 @@ test("geminiJSON: all models 429 in the sprint → patient pass 2 honors the sug
   try {
     const promise = geminiJSON<{ ticker: string; name: string }[]>("prompt", "fake-key");
     await vi.runAllTimersAsync();
-    expect(await promise).toEqual([{ ticker: "AAA", name: "A" }]);
+    const result = await promise;
+    expect(result.value).toEqual([{ ticker: "AAA", name: "A" }]);
+    expect(result.model).toBe("m1");
     expect(fetchMock).toHaveBeenCalledTimes(3);
     const urls = fetchMock.mock.calls.map((c) => String(c[0]));
     // Chain order preserved: pass 1 walks m1→m2, pass 2 re-walks from m1.
@@ -243,7 +250,9 @@ test("geminiJSON: 500/503 sprint through pass 1 fast, then get a 4s pass-2 wait"
   try {
     const promise = geminiJSON<{ ticker: string; name: string }[]>("prompt", "fake-key");
     await vi.runAllTimersAsync();
-    expect(await promise).toEqual([{ ticker: "BBB", name: "B" }]);
+    const result = await promise;
+    expect(result.value).toEqual([{ ticker: "BBB", name: "B" }]);
+    expect(result.model).toBe("m1");
     const urls = fetchMock.mock.calls.map((c) => String(c[0]));
     expect(urls).toHaveLength(3);
     expect(urls[2]).toContain("/m1:");
@@ -305,17 +314,21 @@ test("geminiJSON: module-level cooldown lets the NEXT request skip a just-429'd 
   vi.stubGlobal("fetch", fetchMock);
   try {
     // Request 1: m1 429s (teaching the cooldown map), m2 succeeds.
-    const first = geminiJSON("prompt", "fake-key");
+    const first = geminiJSON<{ ticker: string; name: string }[]>("prompt", "fake-key");
     await vi.runAllTimersAsync();
-    expect(await first).toEqual([{ ticker: "CCC", name: "C" }]);
+    const firstResult = await first;
+    expect(firstResult.value).toEqual([{ ticker: "CCC", name: "C" }]);
+    expect(firstResult.model).toBe("m2");
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
     // Request 2 (moments later, same warm instance): m1 is inside its 10s
     // cooldown → skipped without spending a request; m2 is hit directly.
     fetchMock.mockClear();
-    const second = geminiJSON("prompt", "fake-key");
+    const second = geminiJSON<{ ticker: string; name: string }[]>("prompt", "fake-key");
     await vi.runAllTimersAsync();
-    expect(await second).toEqual([{ ticker: "CCC", name: "C" }]);
+    const secondResult = await second;
+    expect(secondResult.value).toEqual([{ ticker: "CCC", name: "C" }]);
+    expect(secondResult.model).toBe("m2");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0][0])).toContain("/m2:");
   } finally {

@@ -10,7 +10,8 @@ export type ReportType =
   | "bull"
   | "risks"
   | "deepdive"
-  | "story";
+  | "story"
+  | "playbook";
 
 // Shared, machine-verified financial context prepended to every prompt so the
 // model reasons from OUR numbers (matching the valuation/metrics pages) rather
@@ -168,6 +169,32 @@ function storyPrompt(b: StockBundle): string {
   );
 }
 
+// "The Playbook" — modeled on a reference product's live trade-brief report
+// (structure/content patterns only, no wording reused): a catalyst calendar,
+// probability-weighted scenario analysis, ranked key risks, and a market-
+// narrative synthesis. Deliberately drops that reference's technical-analysis
+// sections (chart patterns, entry/exit tranches) — out of scope here, this is
+// a fundamentals-anchored playbook, not a trade trigger. Blends professional
+// sell-side framework patterns (catalyst calendars tied to thesis pillars,
+// genuine-not-fantastical bear/bull scenarios, risk sections that explain WHY
+// a risk may or may not materialize) with our own Damodaran/Mauboussin/Marks
+// house style and the "do NOT invent figures" discipline from dataBlock.
+function playbookPrompt(b: StockBundle): string {
+  const s = b.snapshot;
+  const price = s.price;
+  return (
+    `You are building "The Playbook" for ${s.name} (${s.ticker}) at ${price} — a field guide to what happens next: a catalyst calendar, probability-weighted scenarios, ranked risks, and what the market currently believes. Every claim must be evidence-based; distinguish clearly between facts, inferences, and speculation. Anchor every price figure to OUR valuation numbers above (the composite estimate and the methods table) — never invent a multiple or a price target unconnected to them.\n` +
+    `## CATALYST CALENDAR\n` +
+    `Build a forward-looking, dated calendar of the events most likely to move the stock over the next 12 months. Start with the next scheduled earnings report (infer a realistic date/window from the VERIFIED FINANCIAL DATA above's fiscal-year cadence), then use search to find concrete upcoming product, regulatory, litigation, and industry events (e.g. regulatory decisions, contract or product milestones, index-inclusion or lockup windows, competitor catalysts). For EACH event give: **Date/window** — as precise as the evidence allows; **What to watch** — the specific data point or outcome that resolves it; **Expected directional impact** — bullish, bearish, or two-sided, and why; **How to read the market's reaction** — what a strong vs. weak market response to it would each signal about whether the thesis is intact.\n` +
+    `## SCENARIO ANALYSIS\n` +
+    `Construct Bear / Base / Bull scenarios, each assigned an explicit probability (they must sum to 100%). The Bear case should be a genuine downside risk, not the absolute worst case; the Bull case should be achievable, not fantasy. For EACH scenario give: a 12-MONTH PRICE TARGET derived from OUR valuation methods above — cite which method(s), or the composite, it is anchored to, and show the math from ${price} to the target (do NOT invent a new multiple or discount rate); the 2-3 THINGS THAT MUST HAPPEN for that scenario to be the one that plays out; and the EARLIEST OBSERVABLE SIGNAL — the first concrete data point that would tell you, ahead of the full outcome, that this scenario is the one materializing. Close with the probability-weighted 12-month target, showing the weighted-average math.\n` +
+    `## KEY RISKS\n` +
+    `Using Howard Marks's definition of risk (the probability of permanent capital loss, not volatility), rank the 4-5 risks most likely to break THIS specific thesis, most severe first. Don't just list them — explain why each may or may not materialize. For EACH risk give: **Mechanism** — exactly how it would hurt the business or the stock; **Severity** — the permanent-loss potential if it hits; **Watch metric** — the single figure to track (use the VERIFIED data above where possible) that would confirm the risk is materializing.\n` +
+    `## MARKET NARRATIVE\n` +
+    `Synthesize what the market is saying about ${s.ticker} RIGHT NOW (use recent news, earnings reactions, and analyst commentary from search; if search is unavailable, infer honestly from the data above and say so). Cover: **What the bulls have been saying recently** — the 2-3 strongest current arguments buyers are making; **What the bears have been saying recently** — the 2-3 strongest current counter-arguments; **If the thesis breaks** — for a stock positioned like this, describe how the unwind typically plays out: which holders sell first, whether the multiple or the estimates give way first, and what the mirror image of the bull catalysts above looks like when they disappoint instead of deliver.`
+  );
+}
+
 // Builds the full prompt (data block + report body + markdown instruction) and
 // declares whether Google Search grounding should be enabled for this type.
 export function buildPrompt(
@@ -196,6 +223,14 @@ export function buildPrompt(
       // recent news/commentary. Non-gemini fallbacks silently drop grounding
       // (see lib/ai/gemini.ts) and the prompt tells the model to infer honestly.
       return { prompt: block + storyPrompt(bundle) + MARKDOWN_INSTRUCTION, grounding: true };
+    case "playbook":
+      // Grounding on: the catalyst calendar and market narrative both need
+      // current search results (upcoming events, recent commentary).
+      return {
+        prompt:
+          block + methodsTableBlock(bundle) + playbookPrompt(bundle) + MARKDOWN_INSTRUCTION,
+        grounding: true,
+      };
   }
 }
 
@@ -207,6 +242,7 @@ export const REPORT_TYPES: ReportType[] = [
   "risks",
   "deepdive",
   "story",
+  "playbook",
 ];
 
 export function isReportType(v: unknown): v is ReportType {

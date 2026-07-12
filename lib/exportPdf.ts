@@ -82,9 +82,13 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;");
 }
 
-// Opens a print-ready window for a rendered report. Returns false (and lets
-// the caller show a note) when the popup was blocked instead of throwing.
-export function exportReportPdf(title: string, contentHtml: string): boolean {
+// Opens a print-ready window for a rendered report. `caption` is the same
+// model-attribution line shown on-screen above the report (e.g. "✦
+// AI-generated · model: gemini-2.5-flash") — optional so callers that export
+// something with no AI attribution (none today, but keeps the signature
+// honest) can omit it. Returns false (and lets the caller show a note) when
+// the popup was blocked instead of throwing.
+export function exportReportPdf(title: string, contentHtml: string, caption?: string): boolean {
   const win = window.open("", "_blank");
   if (!win) return false;
 
@@ -106,7 +110,12 @@ export function exportReportPdf(title: string, contentHtml: string): boolean {
   h1.export-title {
     font-size: 1.5rem;
     font-weight: 700;
-    margin: 0 0 1.5rem;
+    margin: 0 0 0.4rem;
+  }
+  p.export-caption {
+    font-size: 0.8rem;
+    color: #8a887f;
+    margin: 0 0 1.1rem;
   }
   ${REPORT_MD_CSS}
   @media print {
@@ -116,6 +125,7 @@ export function exportReportPdf(title: string, contentHtml: string): boolean {
 </head>
 <body>
   <h1 class="export-title">${escapeHtml(title)}</h1>
+  ${caption ? `<p class="export-caption">${escapeHtml(caption)}</p>` : ""}
   <article class="report-md">${contentHtml}</article>
 </body>
 </html>`);
