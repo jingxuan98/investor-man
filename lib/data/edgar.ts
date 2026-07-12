@@ -78,6 +78,10 @@ export function extractGrowthHistory(companyFactsJson: unknown): GrowthYear[] {
     // XOM-style filers tag top-line under this plural ASC-606 variant
     "RevenuesFromContractsWithCustomers",
     "SalesRevenueNet",
+    // GS-style bank/broker-dealer filers have no ASC-606 revenue tag at all —
+    // their top line is "total revenues net of interest expense" (30-ticker
+    // sweep, task-43: GS revWindow was rejected, 0/8 non-null, before this).
+    "RevenuesNetOfInterestExpense",
   ];
 
   // Annual figures for a single tag: Map<fiscalYear, value>, filtered to
@@ -126,7 +130,17 @@ export function extractGrowthHistory(companyFactsJson: unknown): GrowthYear[] {
   };
 
   const revByYear = annualByYear(revenueTags);
-  const niByYear = annualByYear(["NetIncomeLoss"]);
+  const niByYear = annualByYear([
+    "NetIncomeLoss",
+    // CAT-style filers stop tagging plain NetIncomeLoss after ~FY2010 and
+    // report the common-attributable figure under this variant instead
+    // (30-ticker sweep, task-43: CAT niWindow was rejected, 0/8 non-null
+    // for FY2016-2025, despite 8/8 non-null revenue).
+    "NetIncomeLossAvailableToCommonStockholdersBasic",
+    // Lowest priority: includes noncontrolling interests, only used when
+    // neither of the above (common-attributable) tags has a value.
+    "ProfitLoss",
+  ]);
 
   const years = new Set<number>([...revByYear.keys(), ...niByYear.keys()]);
   return [...years]

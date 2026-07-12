@@ -142,3 +142,60 @@ test("extractGrowthHistory: RMBS-style tax-INCLUSIVE revenue tag is recognized",
   expect(out.every((r) => r.revenue !== null)).toBe(true);
   expect(out[0].revenue).toBe(632);
 });
+
+test("extractGrowthHistory: GS-style bank revenue tag (net of interest expense) is recognized", () => {
+  // Goldman Sachs (and other banks/broker-dealers) have no ASC-606 revenue
+  // tag at all — their top line is RevenuesNetOfInterestExpense. Before this
+  // tag was in the list, GS's revenue window read 0/8 non-null and was
+  // rejected outright (30-ticker sweep, task-43).
+  const gsStyle = {
+    facts: {
+      "us-gaap": {
+        RevenuesNetOfInterestExpense: {
+          units: { USD: [e(2021, 44300), e(2022, 47400), e(2023, 46300), e(2024, 53500), e(2025, 58283)] },
+        },
+        NetIncomeLoss: {
+          units: { USD: [e(2021, 21600), e(2022, 11300), e(2023, 8500), e(2024, 14300), e(2025, 16000)] },
+        },
+      },
+    },
+  };
+  const out = extractGrowthHistory(gsStyle);
+  expect(out.map((r) => r.year)).toEqual([2025, 2024, 2023, 2022, 2021]);
+  expect(out.every((r) => r.revenue !== null)).toBe(true);
+  expect(out[0].revenue).toBe(58283);
+});
+
+test("extractGrowthHistory: CAT-style common-attributable/ProfitLoss net-income variants are recognized", () => {
+  // Caterpillar stops tagging plain NetIncomeLoss after ~FY2010 and reports
+  // the common-attributable figure under NetIncomeLossAvailableToCommonStockholdersBasic
+  // instead; ProfitLoss (includes noncontrolling interests) is the lowest-
+  // priority fallback. Before these tags were in the list, CAT's net-income
+  // window read 0/8 non-null for FY2016-2025 despite 8/8 non-null revenue
+  // (30-ticker sweep, task-43).
+  const catStyle = {
+    facts: {
+      "us-gaap": {
+        Revenues: {
+          units: { USD: [e(2021, 51000), e(2022, 59400), e(2023, 67100), e(2024, 64800), e(2025, 66300)] },
+        },
+        // Only covers an old year the other tags don't — merge should still
+        // prefer it where present.
+        NetIncomeLoss: {
+          units: { USD: [e(2010, 2700)] },
+        },
+        NetIncomeLossAvailableToCommonStockholdersBasic: {
+          units: { USD: [e(2021, 6489), e(2022, 6705), e(2023, 10040), e(2024, 8337), e(2025, 8884)] },
+        },
+        ProfitLoss: {
+          units: { USD: [e(2021, 6503), e(2022, 6718), e(2023, 10053), e(2024, 8348), e(2025, 8882)] },
+        },
+      },
+    },
+  };
+  const out = extractGrowthHistory(catStyle);
+  expect(out.every((r) => r.netIncome !== null)).toBe(true);
+  // Common-attributable tag wins over ProfitLoss (which includes NCI) for
+  // the overlapping years.
+  expect(out.find((r) => r.year === 2025)!.netIncome).toBe(8884);
+});
