@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getStockBundle, variantPair } from "@/lib/data/getStockData";
 import { ValuationVariant } from "@/lib/finance/types";
+import { pegRatio, trailingPE } from "@/lib/finance/valuation";
 
 // CompetitorsPanel / InsightPeerPanel send the viewer's globally-selected
 // variant (?variant=calibrated|textbook) so a peer's fair value/upside/
@@ -32,6 +33,10 @@ export async function GET(
       // Additive field for the peer-comparison chart; existing
       // consumers (CompetitorsPanel) ignore unknown JSON fields.
       qualityScore: q.overallScore,
+      // Additive fields (task-43): trailing P/E and PEG vs sector — same
+      // null-safety rules as trailingPE/pegRatio (lib/finance/valuation.ts).
+      trailingPE: trailingPE(s),
+      peg: pegRatio(s),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "error";

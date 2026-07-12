@@ -71,4 +71,6 @@ export const glossary: Record<string, string> = {
     "Debt/Equity — total debt divided by shareholders' equity. Higher means the company is financed more by borrowing than by owner capital, which amplifies both gains and losses.",
   ownerYield:
     "Owner-earnings yield — owner earnings divided by market cap, compared against the 10-year Treasury yield. A positive spread means the business's real cash profit beats what you'd earn risk-free.",
+  pegVsSector:
+    "P/E divided by expected growth — a growth-adjusted price tag. Under ~1 is cheap for the growth you get; over ~2 is expensive.",
 };

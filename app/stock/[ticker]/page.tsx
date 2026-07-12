@@ -61,7 +61,7 @@ export default async function StockOverviewPage({
 
       <section>
         <h2 className="mb-4 text-xl font-semibold text-ink">Competitors</h2>
-        <CompetitorsPanel ticker={s.ticker} />
+        <CompetitorsPanel ticker={s.ticker} sector={s.sector} />
       </section>
     </div>
   );

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { computeValuation, textbookPv } from "@/lib/finance/valuation";
+import { computeValuation, textbookPv, trailingPE, pegRatio } from "@/lib/finance/valuation";
 import { FIX } from "./fixture";
 
 const ZERO_G = { normalGrowth: 0, terminalGrowth: 0, wacc: 0.1, marginExpansion: 0, hHalfLife: 4 };
@@ -490,4 +490,37 @@ test("textbook q1/q2 interpolate between TEXTBOOK's own endpoints, not calibrate
   const calNextVal = model(calNext, "dcf20").value!;
   const wrongQ1 = calCur * Math.pow(calNextVal / calCur, 0.25);
   expect(tbQ1Val).not.toBeCloseTo(wrongQ1, 2);
+});
+
+// task-43: trailing P/E and PEG-vs-sector columns (competitors table).
+test("trailingPE: price / trailingEPS on the fixture (40 / 2 = 20)", () => {
+  expect(trailingPE(FIX)).toBe(20);
+});
+
+test("trailingPE: null when EPS is null or non-positive", () => {
+  expect(trailingPE({ ...FIX, trailingEPS: null })).toBeNull();
+  expect(trailingPE({ ...FIX, trailingEPS: 0 })).toBeNull();
+  expect(trailingPE({ ...FIX, trailingEPS: -1 })).toBeNull();
+});
+
+test("pegRatio: P/E (20) / (100 * pegGrowth, fixture's ~10% NI CAGR) ≈ 2.0", () => {
+  // FIX's netIncome series is a constant 10% CAGR by construction (see
+  // tests/fixture.ts), so pegGrowth(FIX) ≈ 0.10 and pegRatio = 20 / 10 = 2.0.
+  expect(pegRatio(FIX)).toBeCloseTo(2.0, 1);
+});
+
+test("pegRatio: null when P/E is null (non-positive EPS)", () => {
+  expect(pegRatio({ ...FIX, trailingEPS: 0 })).toBeNull();
+});
+
+test("pegRatio: null when growth is non-positive (declining net income)", () => {
+  // Keep the fixture's year labels (still newest-first) but reverse which
+  // year gets which netIncome value, so the newest year is now the SMALLEST
+  // — a negative net-income CAGR (with no EDGAR history to override it).
+  const reversedNI = [...FIX.years].map((y) => y.netIncome).reverse();
+  const declining = {
+    ...FIX,
+    years: FIX.years.map((y, i) => ({ ...y, netIncome: reversedNI[i] })),
+  };
+  expect(pegRatio(declining)).toBeNull();
 });

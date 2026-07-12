@@ -3,6 +3,7 @@ import { getStockBundle, bundleForVariant, variantPair, StockBundle } from "@/li
 import { GateOutput } from "@/lib/finance/gate";
 import { DimensionScore } from "@/lib/finance/types";
 import { buildAnalystNote } from "@/lib/finance/insightNote";
+import { pegRatio, trailingPE } from "@/lib/finance/valuation";
 import InsightClient, { InsightVariantData } from "@/components/InsightClient";
 
 // Reference-site dimension ordering: Predictability, Profitability, Growth,
@@ -84,6 +85,8 @@ export default async function InsightPage({
       roicReading={roicReading}
       dteReading={dteReading}
       buybackReading={buybackReading}
+      ownPE={trailingPE(s)}
+      ownPEG={pegRatio(s)}
       fetchedDate={fetchedDate}
       variants={{ calibrated: dataFor("calibrated"), textbook: dataFor("textbook") }}
     />

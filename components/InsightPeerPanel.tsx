@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { geminiHeaders } from "@/lib/geminiKeyHeader";
 import { useVariant } from "@/components/VariantProvider";
+import { fmtRatio } from "@/lib/format";
+import { SECTOR_MULTIPLES } from "@/lib/finance/valuation";
+import Term from "@/components/Term";
 
 interface Competitor {
   ticker: string;
@@ -16,6 +19,8 @@ interface Summary {
   fairValue: number | null;
   upside: number | null;
   qualityScore: number | null;
+  trailingPE: number | null;
+  peg: number | null;
 }
 
 // A row is either still loading its summary (undefined), failed (null), or resolved.
@@ -31,18 +36,35 @@ interface BarRow {
   failed: boolean;
   quality: number | null;
   upside: number | null; // decimal, e.g. 0.186
+  pe: number | null;
+  peg: number | null;
+}
+
+// Cheap/expensive convention: PEG < 1 tinted green (cheap for the growth),
+// PEG > 2 tinted red (expensive); the 1-2 band is unremarkable, default ink.
+function pegClass(peg: number | null): string {
+  if (peg === null || !Number.isFinite(peg)) return "text-ink2";
+  if (peg < 1) return "text-green";
+  if (peg > 2) return "text-red";
+  return "text-ink";
 }
 
 export default function InsightPeerPanel({
   ticker,
   name,
+  sector,
   ownQualityScore,
   ownUpside,
+  ownPE,
+  ownPEG,
 }: {
   ticker: string;
   name: string;
+  sector: string | null;
   ownQualityScore: number | null;
   ownUpside: number | null;
+  ownPE: number | null;
+  ownPEG: number | null;
 }) {
   // Global calibrated/textbook selection — same rationale as CompetitorsPanel:
   // peer rows are an independent client-side fetch per ticker, so a variant
@@ -142,6 +164,8 @@ export default function InsightPeerPanel({
       failed: false,
       quality: ownQualityScore,
       upside: ownUpside,
+      pe: ownPE,
+      peg: ownPEG,
     },
     ...competitors.map((c) => {
       const row = rows[c.ticker];
@@ -153,6 +177,8 @@ export default function InsightPeerPanel({
         failed: row === null,
         quality: row ? row.qualityScore : null,
         upside: row ? row.upside : null,
+        pe: row ? row.trailingPE : null,
+        peg: row ? row.peg : null,
       };
     }),
   ];
@@ -218,6 +244,52 @@ export default function InsightPeerPanel({
             </div>
           );
         })}
+      </div>
+
+      {/* overflow-x-auto so this table scrolls within the panel on narrow
+          viewports instead of clipping/squishing (mirrors CompetitorsPanel). */}
+      <div className="mt-6 overflow-x-auto rounded-lg border border-line">
+        <table className="w-full min-w-max text-sm">
+          <thead className="bg-page text-left text-ink2">
+            <tr>
+              <th className="px-4 py-2 text-[11px] font-medium uppercase tracking-wide">Company</th>
+              <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
+                P/E
+              </th>
+              <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
+                <Term k="pegVsSector">PEG</Term>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {barRows.map((r) => (
+              <tr key={r.ticker} className="border-t border-line">
+                <td className="px-4 py-3">
+                  <span className={r.isSelf ? "font-semibold text-ink" : "text-ink3"}>
+                    {r.ticker} <span className="text-ink2">{r.name}</span>
+                    {r.isSelf && <span className="ml-2 text-xs text-ink2">· this stock</span>}
+                  </span>
+                </td>
+                <td className="num px-4 py-3 text-right">
+                  {r.loading ? "…" : r.failed ? "n/a" : fmtRatio(r.pe)}
+                </td>
+                <td className={`num px-4 py-3 text-right font-medium ${pegClass(r.peg)}`}>
+                  {r.loading ? "…" : r.failed ? "n/a" : fmtRatio(r.peg)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-line bg-page">
+              <td className="px-4 py-3 text-ink2">Sector median</td>
+              <td className="num px-4 py-3 text-right text-ink2">
+                {fmtRatio(sector != null ? SECTOR_MULTIPLES[sector]?.pe ?? null : null)}
+              </td>
+              {/* PEG has no sector-level analog (growth varies stock by stock within a sector). */}
+              <td className="px-4 py-3 text-right text-ink2">—</td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
     </div>
   );

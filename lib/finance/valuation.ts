@@ -63,6 +63,25 @@ export function resolveMultiples(
   return { evRev: pick("evRev"), pFcf: pick("pFcf"), pe: pick("pe"), evEbitda: pick("evEbitda") };
 }
 
+// Trailing P/E = price / TTM EPS. Null when EPS isn't positive (a loss-making
+// or break-even trailing year has no meaningful P/E) or EPS is unknown.
+export function trailingPE(s: FinancialSnapshot): number | null {
+  if (s.trailingEPS === null || !(s.trailingEPS > 0)) return null;
+  return s.price / s.trailingEPS;
+}
+
+// PEG = trailing P/E ÷ (growth rate as a whole number, e.g. 20 for 20%), using
+// the same 5Y net-income CAGR (pegGrowth) the PEG-implied valuation model
+// uses. Null when growth is non-positive (PEG is meaningless for a shrinking
+// or loss-making growth base) or P/E itself is null.
+export function pegRatio(s: FinancialSnapshot): number | null {
+  const pe = trailingPE(s);
+  if (pe === null) return null;
+  const g = pegGrowth(s);
+  if (g === null || g <= 0) return null;
+  return pe / (100 * g);
+}
+
 const HORIZON = 20;
 
 // Three-stage growth path (the reference site's verified live architecture):

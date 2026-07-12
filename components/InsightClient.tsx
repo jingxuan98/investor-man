@@ -70,6 +70,8 @@ export default function InsightClient({
   roicReading,
   dteReading,
   buybackReading,
+  ownPE,
+  ownPEG,
   fetchedDate,
   variants,
 }: {
@@ -80,6 +82,11 @@ export default function InsightClient({
   roicReading: string;
   dteReading: string;
   buybackReading: string;
+  // Variant-independent (same edgarWindow-derived pegGrowth regardless of
+  // calibrated/textbook), so — like roicReading/dteReading/buybackReading —
+  // computed once server-side rather than per-variant.
+  ownPE: number | null;
+  ownPEG: number | null;
   fetchedDate: string;
   variants: { calibrated: InsightVariantData; textbook: InsightVariantData };
 }) {
@@ -168,7 +175,15 @@ export default function InsightClient({
 
       <Card>
         <Kicker index="02" title="PEER COMPARISON" subtitle={`Composite quality vs. ${sector ?? "peers"}`} />
-        <InsightPeerPanel ticker={ticker} name={name} ownQualityScore={d.overallScore} ownUpside={d.upside} />
+        <InsightPeerPanel
+          ticker={ticker}
+          name={name}
+          sector={sector}
+          ownQualityScore={d.overallScore}
+          ownUpside={d.upside}
+          ownPE={ownPE}
+          ownPEG={ownPEG}
+        />
       </Card>
 
       <p className="text-xs text-ink2">

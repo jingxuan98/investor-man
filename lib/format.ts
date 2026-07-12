@@ -14,3 +14,8 @@ export function fmtPct(n: number | null): string {
   if (n === null || !Number.isFinite(n)) return "n/a";
   return `${n >= 0 ? "+" : ""}${(n * 100).toFixed(1)}%`;
 }
+// One-decimal multiple, e.g. P/E or PEG — matches MultiplesCard's existing convention.
+export function fmtRatio(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) return "n/a";
+  return `${n.toFixed(1)}x`;
+}

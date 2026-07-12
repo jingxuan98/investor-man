@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { fmtMoney, fmtPct } from "@/lib/format";
+import { fmtMoney, fmtPct, fmtRatio } from "@/lib/format";
 import { geminiHeaders } from "@/lib/geminiKeyHeader";
 import { useVariant } from "@/components/VariantProvider";
+import { SECTOR_MULTIPLES } from "@/lib/finance/valuation";
+import Term from "@/components/Term";
 
 interface Competitor {
   ticker: string;
@@ -17,6 +19,8 @@ interface Summary {
   price: number | null;
   fairValue: number | null;
   upside: number | null;
+  trailingPE: number | null;
+  peg: number | null;
 }
 
 // A row is either still loading its summary (undefined), failed (null),
@@ -30,7 +34,22 @@ function upsideClass(upside: number | null): string {
   return upside >= 0 ? "text-green" : "text-red";
 }
 
-export default function CompetitorsPanel({ ticker }: { ticker: string }) {
+// Cheap/expensive convention: PEG < 1 tinted green (cheap for the growth),
+// PEG > 2 tinted red (expensive); the 1-2 band is unremarkable, default ink.
+function pegClass(peg: number | null): string {
+  if (peg === null || !Number.isFinite(peg)) return "text-ink2";
+  if (peg < 1) return "text-green";
+  if (peg > 2) return "text-red";
+  return "text-ink";
+}
+
+export default function CompetitorsPanel({
+  ticker,
+  sector,
+}: {
+  ticker: string;
+  sector?: string | null;
+}) {
   // Global calibrated/textbook selection — peer fair-value/upside must match
   // the SAME variant as the subject stock's own tabs (task brief: "sector-
   // average + competitor comparisons" reads the selected variant's
@@ -154,6 +173,12 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
             <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
               Upside
             </th>
+            <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
+              P/E
+            </th>
+            <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
+              <Term k="pegVsSector">PEG</Term>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -170,14 +195,14 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
                   <span className="ml-2 text-ink2">{c.ticker}</span>
                 </td>
                 {loading ? (
-                  <td colSpan={3} className="px-4 py-3 text-right">
+                  <td colSpan={5} className="px-4 py-3 text-right">
                     <span
                       className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-line border-t-ink2 align-middle"
                       aria-label="Loading"
                     />
                   </td>
                 ) : failed ? (
-                  <td colSpan={3} className="px-4 py-3 text-right text-ink2">
+                  <td colSpan={5} className="px-4 py-3 text-right text-ink2">
                     n/a
                   </td>
                 ) : (
@@ -189,12 +214,29 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
                     >
                       {fmtPct(row!.upside)}
                     </td>
+                    <td className="num px-4 py-3 text-right">{fmtRatio(row!.trailingPE)}</td>
+                    <td className={`num px-4 py-3 text-right font-medium ${pegClass(row!.peg)}`}>
+                      {fmtRatio(row!.peg)}
+                    </td>
                   </>
                 )}
               </tr>
             );
           })}
         </tbody>
+        <tfoot>
+          <tr className="border-t border-line bg-page">
+            <td className="px-4 py-3 text-ink2">Sector median</td>
+            <td className="px-4 py-3 text-right text-ink2">—</td>
+            <td className="px-4 py-3 text-right text-ink2">—</td>
+            <td className="px-4 py-3 text-right text-ink2">—</td>
+            <td className="num px-4 py-3 text-right text-ink2">
+              {fmtRatio(sector != null ? SECTOR_MULTIPLES[sector]?.pe ?? null : null)}
+            </td>
+            {/* PEG has no sector-level analog (growth varies stock by stock within a sector). */}
+            <td className="px-4 py-3 text-right text-ink2">—</td>
+          </tr>
+        </tfoot>
       </table>
       </div>
     </div>
