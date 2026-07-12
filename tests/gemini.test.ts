@@ -454,12 +454,55 @@ test("scrubReasoningLeak: a <thinking> block split across chunks is still stripp
 });
 
 const DECISION_WINDOW_TEST_THRESHOLD = 800;
+const REASONING_SCAN_CAP_TEST_THRESHOLD = 8_192;
 
-test("scrubReasoningLeak: a heading appearing after the ~800-char window is not stripped even with reasoning-looking preamble", async () => {
-  const filler = "Alright ".repeat(120); // > 800 chars, no heading in it
-  const text = "Okay, " + filler + "\n\n## Overview\nReal content.";
-  expect(text.indexOf("## Overview")).toBeGreaterThan(DECISION_WINDOW_TEST_THRESHOLD);
-  const out = await readAll(scrubReasoningLeak(streamFromChunks([text])));
+test("scrubReasoningLeak: a ~2.5KB reasoning leak before the heading is stripped (real gemma ONDS-playbook shape)", async () => {
+  // Models the observed poisoned cache entry: repeated planning notes and
+  // indented bullet fragments, well past the old 800-char window, then the
+  // real report heading.
+  const leak =
+    "Okay, the user wants The Playbook for Ondas Inc. (ONDS).\n" +
+    "    *   Catalyst Calendar.\n    *   Scenario Analysis with price targets.\n".repeat(30) +
+    "No inventing figures, anchor all prices to the provided valuation table.\n";
+  const report = "# The Playbook: Ondas Inc. (ONDS)\n\n**Current Price:** 7.26\n";
+  const text = leak + report;
+  expect(leak.length).toBeGreaterThan(2_000);
+  expect(leak.length).toBeLessThan(REASONING_SCAN_CAP_TEST_THRESHOLD);
+  // Deliver in streaming-sized chunks to exercise repeated buffering.
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += 400) chunks.push(text.slice(i, i + 400));
+  const out = await readAll(scrubReasoningLeak(streamFromChunks(chunks)));
+  expect(out).toBe(report);
+});
+
+test("scrubReasoningLeak: a legit long opening with no heading is untouched and not held past the 800-char window", async () => {
+  // A non-reasoning opening must be released as soon as the quick window is
+  // spent — even while the stream is still open (never held for the 8KB scan).
+  const opening = "The company posted strong results across all segments. ".repeat(20); // > 800 chars
+  expect(opening.length).toBeGreaterThan(DECISION_WINDOW_TEST_THRESHOLD);
+  const enc = new TextEncoder();
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const source = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+  const reader = scrubReasoningLeak(source).getReader();
+  controller.enqueue(enc.encode(opening));
+  // Stream deliberately NOT closed — the read below only resolves if the
+  // scrubber decided (passed through) at the window rather than buffering on.
+  const { done, value } = await reader.read();
+  expect(done).toBe(false);
+  expect(new TextDecoder().decode(value)).toBe(opening);
+  controller.close();
+});
+
+test("scrubReasoningLeak: reasoning-looking opening with no heading within the 8KB cap passes through whole", async () => {
+  const text = "Okay, let me think about this. ".repeat(300); // ~9.3KB, no heading anywhere
+  expect(text.length).toBeGreaterThan(REASONING_SCAN_CAP_TEST_THRESHOLD);
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += 500) chunks.push(text.slice(i, i + 500));
+  const out = await readAll(scrubReasoningLeak(streamFromChunks(chunks)));
   expect(out).toBe(text);
 });
 

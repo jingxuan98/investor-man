@@ -389,20 +389,26 @@ export function sseTextStream(
 // cosmetic (the report itself is fine) but looks broken mid-stream and ends
 // up baked into the cache.
 //
-// Strategy: buffer only the first ~DECISION_WINDOW_CHARS of the stream (never
-// the whole response) looking for the first markdown heading line. Once a
-// heading is found — or the window is exhausted, or the stream ends first —
-// decide once:
+// Strategy: buffer the opening of the stream looking for the first markdown
+// heading line, then decide once:
 //   - a leading <thinking>...</thinking> block is always stripped once its
 //     closing tag is seen;
-//   - otherwise, if there's a heading and the text before it look like a
-//     model thinking out loud (matches REASONING_START_RE) and starts within
-//     the window, strip everything before the heading;
-//   - otherwise pass the buffered text through unchanged — a legitimate
-//     report opening with a normal paragraph must never be eaten.
+//   - if the stream OPENS like a model thinking out loud (matches
+//     REASONING_START_RE), keep scanning for the first heading up to a hard
+//     cap of REASONING_SCAN_CAP_CHARS and strip everything before it. Real
+//     gemma leaks run well past 800 chars (a cached ONDS playbook carried
+//     ~2.5KB of planning notes before its "# The Playbook" heading — the old
+//     single 800-char window gave up and passed the whole leak through), so
+//     a reasoning-looking opening is worth buffering longer for. If the cap
+//     is hit with no heading, pass everything through — never eat a whole
+//     (possibly heading-less) report.
+//   - if the opening does NOT look like reasoning, decide within
+//     DECISION_WINDOW_CHARS as before — legitimate reports start streaming
+//     to the reader immediately and are never held back by the deeper scan.
 // After the decision, every subsequent chunk is passed straight through with
 // zero buffering — this never holds up the rest of the stream.
 const DECISION_WINDOW_CHARS = 800;
+const REASONING_SCAN_CAP_CHARS = 8_192;
 const HEADING_RE = /^#{1,2}[ \t]+\S/m;
 const THINKING_BLOCK_RE = /^\s*<thinking>[\s\S]*?<\/thinking>\s*/i;
 const LEADING_THINKING_TAG_RE = /^\s*<thinking>/i;
@@ -416,23 +422,31 @@ function decideScrub(buf: string): string | null {
   const thinkingBlock = THINKING_BLOCK_RE.exec(buf);
   if (thinkingBlock) return buf.slice(thinkingBlock[0].length);
   // A <thinking> tag has opened but its closing tag hasn't arrived yet —
-  // keep buffering (bounded by the window check below) rather than
-  // prematurely deciding this isn't a thinking block.
-  if (LEADING_THINKING_TAG_RE.test(buf) && buf.length < DECISION_WINDOW_CHARS) {
+  // keep buffering (bounded by the hard cap below) rather than prematurely
+  // deciding this isn't a thinking block.
+  if (LEADING_THINKING_TAG_RE.test(buf) && buf.length < REASONING_SCAN_CAP_CHARS) {
     return null;
   }
+
+  // Whether the stream OPENS like leaked reasoning — this picks which budget
+  // applies: the deep scan cap (reasoning) or the quick window (legit report).
+  const opensLikeReasoning = REASONING_START_RE.test(buf.trim());
+  const scanBudget = opensLikeReasoning ? REASONING_SCAN_CAP_CHARS : DECISION_WINDOW_CHARS;
 
   const heading = HEADING_RE.exec(buf);
   if (heading) {
     const idx = heading.index;
-    const preamble = buf.slice(0, idx);
-    if (idx > 0 && idx <= DECISION_WINDOW_CHARS && REASONING_START_RE.test(preamble.trim())) {
-      return buf.slice(idx);
+    if (idx > 0 && idx <= scanBudget && opensLikeReasoning) {
+      return buf.slice(idx); // strip the reasoning preamble
     }
     return buf; // no preamble, or preamble doesn't look like reasoning — pass through
   }
 
-  if (buf.length >= DECISION_WINDOW_CHARS) return buf; // no heading in the window — pass through
+  // No heading yet: give up (pass through) once the applicable budget is
+  // spent. For a reasoning-looking opening that means the 8KB cap — never eat
+  // a whole heading-less response; for a normal opening the 800-char window
+  // keeps legitimate reports streaming promptly.
+  if (buf.length >= scanBudget) return buf;
   return null; // keep buffering
 }
 

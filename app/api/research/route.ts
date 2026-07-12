@@ -53,7 +53,12 @@ export async function POST(req: Request) {
   // v3: cached value is now {model, text} (was a bare string under v2), so the
   // model-attribution badge can be served on a cache hit too — bump the key so
   // v2-era entries (missing the model field) don't get misread as v3 shape.
-  const cacheKey = `research:${ticker}:${type}:${variant}:v3`;
+  // v4: the reasoning-leak scrubber (lib/ai/gemini.ts) previously gave up at
+  // 800 chars, so v3-era entries from weak fallback models (gemma) can carry
+  // kilobytes of leaked chain-of-thought preamble baked into the cached text
+  // (seen on real playbooks). Bump so those poisoned entries are regenerated
+  // through the fixed scrubber rather than served as-is until TTL expiry.
+  const cacheKey = `research:${ticker}:${type}:${variant}:v4`;
 
   // Cached hit → return the whole body at once, plus which model produced it.
   if (!force) {
