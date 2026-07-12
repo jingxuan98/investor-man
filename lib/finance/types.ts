@@ -59,10 +59,10 @@ export type ValuationVariant = "calibrated" | "textbook";
 // (every model re-answers "what will one share be worth ONE fiscal year from
 // now if our assumptions hold?" by advancing its own cash flow/metric one
 // year along its own growth path — see valuation.ts's `advance` and
-// `growthPath`), or the quarterly points "q1"/"q2" (3-mo/6-mo forward)
-// — geometric-interpolation points on the current->nextYear path, not
-// independently re-run models. See valuation.ts's `interpolateGeometric`.
-export type Horizon = "current" | "q1" | "q2" | "nextYear";
+// `growthPath`), or the quarterly points "q1"/"q2"/"q3" (3-mo/6-mo/9-mo
+// forward) — geometric-interpolation points on the current->nextYear path,
+// not independently re-run models. See valuation.ts's `interpolateModel`.
+export type Horizon = "current" | "q1" | "q2" | "q3" | "nextYear";
 
 export interface Assumptions {
   normalGrowth: number; // decimal, e.g. 0.12

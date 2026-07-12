@@ -120,6 +120,12 @@ export default function ResearchClient({
           setError(
             "No AI key available — click the key icon in the header to add your free Gemini API key (aistudio.google.com/apikey)."
           );
+        } else if (code === "model_unavailable") {
+          // Reason: a hard, non-retryable failure straight from the Gemini
+          // API call (all models in the chain rejected it) — distinct from
+          // our own pipeline breaking, so tell the user it's the model, not
+          // a bug, and that retrying shortly is the right move.
+          setError("The AI model is rate-limited or temporarily unavailable — please try again shortly.");
         } else {
           setError("Something went wrong generating this report. Please try again.");
         }

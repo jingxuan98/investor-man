@@ -81,8 +81,14 @@ export async function POST(req: Request) {
     if (msg === "GEMINI_KEY_MISSING") {
       return NextResponse.json({ error: "no_api_key" }, { status: 503 });
     }
+    // Reason: distinct from the getStockBundle catch above's "upstream_error"
+    // (our own data-fetch pipeline) — this is a hard, non-retryable failure
+    // straight from the Gemini API call itself (e.g. a one-off 400/403/404 on
+    // every model in the chain). The client shows a model-specific message
+    // instead of the generic one, since telling the user to just "try again"
+    // is accurate here — it's the model, not our code, that failed.
     console.error("[research] geminiStream failed:", e);
-    return NextResponse.json({ error: "upstream_error" }, { status: 502 });
+    return NextResponse.json({ error: "model_unavailable" }, { status: 502 });
   }
 
   // Accumulate the full text as chunks pass through to the client. flush() runs

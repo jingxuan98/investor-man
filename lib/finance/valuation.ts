@@ -274,12 +274,12 @@ function multipleModel(
 // ---- main -----------------------------------------------------------------
 
 // The two horizons buildModels actually walks the engine for — "current" and
-// the one-fiscal-year-forward point. q1/q2 (below) are never passed in here;
+// the one-fiscal-year-forward point. q1/q2/q3 (below) are never passed in here;
 // they're derived by interpolating between these two endpoint runs instead.
 type EndpointHorizon = "current" | "nextYear";
 
 // Builds all 10 models for one endpoint horizon. Split out of
-// computeValuation so the q1/q2 quarterly horizons (see interpolateModel) can
+// computeValuation so the q1/q2/q3 quarterly horizons (see interpolateModel) can
 // run this exactly twice per render — once per endpoint — and derive the
 // quarter points by interpolation, instead of re-walking the engine 4 times.
 function buildModels(
@@ -450,7 +450,7 @@ function buildModels(
 
 // Geometric interpolation between the two exact endpoints (today's value and
 // the 1-year-forward value) at fraction f (0.25 for q1/3-mo, 0.5 for
-// q2/6-mo): V(q) = Vcur * (Vnext/Vcur)^f — the constant-rate-accretion path
+// q2/6-mo, 0.75 for q3/9-mo): V(q) = Vcur * (Vnext/Vcur)^f — the constant-rate-accretion path
 // between the two points. Exact for the multiples/PEG/Graham family (equals
 // metric*(1+g)^f) and a correct first-order roll for the DCF/H-model family.
 // ponytail: this is geometric interpolation between two pre-computed
@@ -506,11 +506,11 @@ export function computeValuation(
     };
   }
 
-  // "current"/"nextYear" walk the engine directly, once; "q1"/"q2" build both
-  // endpoints once each (never 4 engine runs per render) and interpolate.
+  // "current"/"nextYear" walk the engine directly, once; "q1"/"q2"/"q3" build
+  // both endpoints once each (never 4 engine runs per render) and interpolate.
   let models: ModelResult[];
-  if (horizon === "q1" || horizon === "q2") {
-    const f = horizon === "q1" ? 0.25 : 0.5;
+  if (horizon === "q1" || horizon === "q2" || horizon === "q3") {
+    const f = horizon === "q1" ? 0.25 : horizon === "q2" ? 0.5 : 0.75;
     const cur = buildModels(s, overrides, a, variant, "current");
     const next = buildModels(s, overrides, a, variant, "nextYear");
     models = cur.map((m, i) => interpolateModel(m, next[i], f));

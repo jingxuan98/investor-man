@@ -26,11 +26,12 @@ function cfg(apiKey?: string) {
   return { key, models: modelChain() };
 }
 
-// 429 (rate limited) and 503 (model overloaded/unavailable) are the transient
+// 429 (rate limited), 503 (model overloaded/unavailable), and 500 (Gemini's
+// own transient internal error — seen in practice under load) are the
 // statuses worth retrying against the next model in the chain. Every other
 // non-OK status is a hard error (bad request, auth, etc.) and fails immediately.
 function isRetryableStatus(s: number): boolean {
-  return s === 429 || s === 503;
+  return s === 429 || s === 503 || s === 500;
 }
 
 export async function geminiJSON<T>(prompt: string, apiKey?: string): Promise<T> {
@@ -63,7 +64,18 @@ export async function geminiJSON<T>(prompt: string, apiKey?: string): Promise<T>
     const data = await res.json();
     const text =
       data.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
-    return JSON.parse(text) as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      // Reason: a model (esp. a weaker fallback like gemma) occasionally
+      // returns truncated/malformed JSON despite responseMimeType being set
+      // — this used to throw uncaught straight out of the function, skipping
+      // every remaining fallback model entirely. Treat it the same as a
+      // transient status: try the next model in the chain before giving up.
+      if (last) throw new Error("GEMINI_PARSE_ERROR");
+      console.warn("[gemini] malformed JSON from", model, "→ falling back to", models[i + 1]);
+      continue;
+    }
   }
   // Unreachable: an empty chain is impossible (modelChain always includes the
   // primary). Present so every path returns/throws for TypeScript.

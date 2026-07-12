@@ -69,6 +69,8 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
           setError(
             "No AI key available — click the key icon in the header to add your free Gemini API key (aistudio.google.com/apikey)."
           );
+        } else if (code === "model_unavailable") {
+          setError("The AI model is rate-limited or temporarily unavailable — please try again shortly.");
         } else {
           setError("Something went wrong drafting this note. Please try again.");
         }

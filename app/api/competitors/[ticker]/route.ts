@@ -32,7 +32,9 @@ export async function GET(
     if (msg === "GEMINI_KEY_MISSING") {
       return NextResponse.json({ error: "no_api_key" }, { status: 503 });
     }
+    // Reason: same distinction as app/api/research/route.ts — a hard,
+    // non-retryable failure from the Gemini call itself, not our own pipeline.
     console.error("[competitors] geminiJSON failed:", e);
-    return NextResponse.json({ error: "upstream_error" }, { status: 502 });
+    return NextResponse.json({ error: "model_unavailable" }, { status: 502 });
   }
 }

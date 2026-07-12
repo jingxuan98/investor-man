@@ -415,16 +415,29 @@ test("q2 of dcf20 == geometric mean of current and nextYear", () => {
   expect(q2Val).toBeCloseTo(Math.sqrt(curVal * nextVal), 6);
 });
 
-test("monotonic for a growing fixture: current < q1 < q2 < nextYear (composite)", () => {
+test("monotonic for a growing fixture: current < q1 < q2 < q3 < nextYear (composite)", () => {
   const overrides = { normalGrowth: 0.1, terminalGrowth: 0.04, wacc: 0.1, marginExpansion: 0, hHalfLife: 4 };
   const current = computeValuation(FIX, overrides, "calibrated", "current").composite!;
   const q1 = computeValuation(FIX, overrides, "calibrated", "q1").composite!;
   const q2 = computeValuation(FIX, overrides, "calibrated", "q2").composite!;
+  const q3 = computeValuation(FIX, overrides, "calibrated", "q3").composite!;
   const nextYear = computeValuation(FIX, overrides, "calibrated", "nextYear").composite!;
   expect(current).not.toBeNull();
   expect(current).toBeLessThan(q1);
   expect(q1).toBeLessThan(q2);
-  expect(q2).toBeLessThan(nextYear);
+  expect(q2).toBeLessThan(q3);
+  expect(q3).toBeLessThan(nextYear);
+});
+
+test("q3 P/FCF == current x (1 + seed growth)^0.75 exactly", () => {
+  const overrides = { normalGrowth: 0.2, terminalGrowth: 0.04, wacc: 0.1, marginExpansion: 0, hHalfLife: 4 };
+  const current = computeValuation(FIX, overrides, "calibrated", "current");
+  const q3 = computeValuation(FIX, overrides, "calibrated", "q3");
+  const curVal = model(current, "pFcf").value!;
+  const q3Val = model(q3, "pFcf").value!;
+  // Same reasoning as the q1 test above: P/FCF's nextYear == current * 1.2
+  // exactly, so q3's geometric interpolation reduces to current * 1.2^0.75.
+  expect(q3Val).toBeCloseTo(curVal * Math.pow(1.2, 0.75), 10);
 });
 
 test("null endpoint => null quarterly value (wacc=0 nulls the DCF family at both endpoints)", () => {
@@ -435,8 +448,10 @@ test("null endpoint => null quarterly value (wacc=0 nulls the DCF family at both
   expect(model(nextYear, "dcf20").value).toBeNull();
   const q1 = computeValuation(FIX, overrides, "calibrated", "q1");
   const q2 = computeValuation(FIX, overrides, "calibrated", "q2");
+  const q3 = computeValuation(FIX, overrides, "calibrated", "q3");
   expect(model(q1, "dcf20").value).toBeNull();
   expect(model(q2, "dcf20").value).toBeNull();
+  expect(model(q3, "dcf20").value).toBeNull();
 });
 
 // Task 38 part A: q1/q2 must be built off the SAME variant's own current/

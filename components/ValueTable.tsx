@@ -16,6 +16,7 @@ import Term from "@/components/Term";
 import SignalBadge from "@/components/SignalBadge";
 import VariantToggle, { VARIANT_LABEL } from "@/components/VariantToggle";
 import { useVariant } from "@/components/VariantProvider";
+import { useTooltip, TooltipBubble } from "@/components/Tooltip";
 
 // Raw text state for the five knob inputs — kept as strings (not numbers) so
 // the field can hold transient/partial input (e.g. "-", "1.") without losing
@@ -98,6 +99,7 @@ const HORIZON_LABEL: Record<Horizon, string> = {
   current: "Today",
   q1: "1Q",
   q2: "2Q",
+  q3: "3Q",
   nextYear: "1Y",
 };
 
@@ -107,6 +109,8 @@ const HORIZON_TOOLTIP: Record<Horizon, string> = {
     "3 months forward: a geometrically-interpolated point 1/4 of the way along the path from today's value to the 1-year-forward value (constant-rate accretion, not a full re-projection).",
   q2:
     "6 months forward: a geometrically-interpolated point halfway along the path from today's value to the 1-year-forward value (constant-rate accretion, not a full re-projection).",
+  q3:
+    "9 months forward: a geometrically-interpolated point 3/4 of the way along the path from today's value to the 1-year-forward value (constant-rate accretion, not a full re-projection).",
   nextYear:
     "Rolls every model forward one fiscal year: cash flows grow one year along the assumed path, multiples apply to next year's metrics. Debt, cash and multiples held constant.",
 };
@@ -115,6 +119,7 @@ const HORIZON_RETURN_LABEL: Record<Horizon, string> = {
   current: "",
   q1: "3-mo",
   q2: "6-mo",
+  q3: "9-mo",
   nextYear: "1-yr",
 };
 
@@ -123,6 +128,7 @@ const HORIZON_FORWARD_SUFFIX: Record<Horizon, string> = {
   current: "",
   q1: " (1Q forward)",
   q2: " (2Q forward)",
+  q3: " (3Q forward)",
   nextYear: " (1yr forward)",
 };
 
@@ -131,45 +137,45 @@ const HORIZON_EXPLAINER_SUFFIX: Record<Horizon, string> = {
   current: "",
   q1: " A 3-month-forward point interpolated along the path to next year's value, not today's value.",
   q2: " A 6-month-forward point interpolated along the path to next year's value, not today's value.",
+  q3: " A 9-month-forward point interpolated along the path to next year's value, not today's value.",
   nextYear: " Every method rolled forward one fiscal year, not today's value.",
 };
 
-const HORIZONS: Horizon[] = ["current", "q1", "q2", "nextYear"];
+const HORIZONS: Horizon[] = ["current", "q1", "q2", "q3", "nextYear"];
 
 // Segmented horizon toggle — orthogonal to the variant toggle (above) and the
 // investor-style sub-tabs (below): every combination of variant x style x
-// horizon is valid, and this control's state is independent of both. Mirrors
-// VariantButton's hover-tooltip pattern/markup exactly.
+// horizon is valid, and this control's state is independent of both. Uses
+// the shared portal tooltip (Tooltip.tsx) — same pattern as VariantButton.
 function HorizonButton({
   horizon,
   active,
-  align,
   onClick,
 }: {
   horizon: Horizon;
   active: boolean;
-  align: "left" | "right";
   onClick: () => void;
 }) {
-  const posClass =
-    align === "left"
-      ? "left-0 origin-top-left"
-      : "right-0 origin-top-right";
+  const { triggerRef, bubbleRef, open, pos, isTouch, openTooltip, closeTooltip, toggleTooltip } =
+    useTooltip<HTMLButtonElement>();
   return (
     <button
+      ref={triggerRef}
       type="button"
       aria-pressed={active}
       aria-label={HORIZON_TOOLTIP[horizon]}
-      className={`group relative tab-btn !px-3 !py-1.5 !text-xs ${active ? "active" : ""}`}
-      onClick={onClick}
+      className={`relative tab-btn !px-3 !py-1.5 !text-xs ${active ? "active" : ""}`}
+      onClick={() => {
+        onClick();
+        if (isTouch) toggleTooltip();
+      }}
+      onMouseEnter={!isTouch ? openTooltip : undefined}
+      onMouseLeave={!isTouch ? closeTooltip : undefined}
     >
       {HORIZON_LABEL[horizon]}
-      <span
-        role="tooltip"
-        className={`pointer-events-none absolute top-full z-50 mt-1.5 w-72 max-w-[calc(100vw-2rem)] scale-95 whitespace-normal break-words rounded-lg border border-line bg-card p-2.5 text-xs font-normal normal-case leading-snug tracking-normal text-ink3 opacity-0 shadow-lg transition-all duration-150 group-hover:scale-100 group-hover:opacity-100 ${posClass}`}
-      >
+      <TooltipBubble bubbleRef={bubbleRef} pos={pos} open={open}>
         {HORIZON_TOOLTIP[horizon]}
-      </span>
+      </TooltipBubble>
     </button>
   );
 }
@@ -472,19 +478,11 @@ export default function ValueTable({
         <div className="flex flex-wrap items-center gap-2">
           <VariantToggle />
           <div className="flex gap-1" role="group" aria-label="Valuation horizon">
-            {HORIZONS.map((h, i) => (
+            {HORIZONS.map((h) => (
               <HorizonButton
                 key={h}
                 horizon={h}
                 active={activeHorizon === h}
-                // Reason: with 4 compact buttons packed on one row, a "left"
-                // anchor on the right-hand buttons pushed their w-72 tooltip
-                // past the viewport edge on narrow screens — inflating
-                // document.body.scrollWidth into page-level horizontal
-                // scroll (this control isn't wrapped by any overflow-hidden
-                // card, unlike the tables). Right half of the row opens its
-                // tooltip toward the left instead, staying on-screen.
-                align={i >= HORIZONS.length / 2 ? "right" : "left"}
                 onClick={() => setActiveHorizon(h)}
               />
             ))}

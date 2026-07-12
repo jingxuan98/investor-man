@@ -43,6 +43,10 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
     "loading"
   );
   const [noApiKey, setNoApiKey] = useState(false);
+  // Set when the list fetch failed with a rate-limited/model-unavailable
+  // upstream error (as opposed to a missing key) — lets the error message
+  // say "try again shortly" instead of hinting at a key that's already there.
+  const [transient, setTransient] = useState(false);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [rows, setRows] = useState<Record<string, RowState>>({});
   // Monotonic token for the latest effect run. A StrictMode remount (or a
@@ -57,6 +61,7 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
     const active = () => runId.current === id;
     setListState("loading");
     setNoApiKey(false);
+    setTransient(false);
     setCompetitors([]);
     setRows({});
 
@@ -65,9 +70,10 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
       try {
         const res = await fetch(`/api/competitors/${ticker}`, { headers: geminiHeaders() });
         if (!res.ok) {
-          if (res.status === 503) {
-            const data = await res.json().catch(() => null);
-            if (data?.error === "no_api_key" && active()) setNoApiKey(true);
+          const data = await res.json().catch(() => null);
+          if (active()) {
+            if (res.status === 503 && data?.error === "no_api_key") setNoApiKey(true);
+            else if (res.status === 429 || data?.error === "model_unavailable") setTransient(true);
           }
           throw new Error("list_failed");
         }
@@ -108,6 +114,7 @@ export default function CompetitorsPanel({ ticker }: { ticker: string }) {
         Competitors unavailable
         {noApiKey &&
           " — click the key icon in the header to add your free Gemini API key (aistudio.google.com/apikey)."}
+        {transient && " — the AI model is rate-limited or temporarily unavailable, try again shortly."}
       </p>
     );
   }

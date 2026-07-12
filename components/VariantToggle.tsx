@@ -2,6 +2,7 @@
 
 import { ValuationVariant } from "@/lib/finance/types";
 import { useVariant } from "@/components/VariantProvider";
+import { useTooltip, TooltipBubble } from "@/components/Tooltip";
 
 // Exported so other views needing the plain label/tooltip text (e.g.
 // ValueTable's composite-row caption) share these strings instead of
@@ -22,35 +23,38 @@ export const VARIANT_TOOLTIP: Record<ValuationVariant, string> = {
 // Rendered both in the stock header (near the classification badge) and
 // inline in ValueTable (where the task brief says it must stay); both
 // instances read/write the same VariantProvider context, so flipping either
-// one flips both in lockstep. Mirrors Term.tsx's hover-tooltip pattern (same
-// group/tooltip CSS classes) so the popover matches the app's design system.
+// one flips both in lockstep. Uses the shared portal tooltip (Tooltip.tsx) —
+// hover shows it on desktop; on touch, tapping both selects the variant (as
+// before) and toggles the tooltip open, since there's no hover to show it.
 function VariantButton({
   variant,
   active,
-  align,
   onClick,
 }: {
   variant: ValuationVariant;
   active: boolean;
-  align: "left" | "right";
   onClick: () => void;
 }) {
-  const posClass = align === "left" ? "left-0 origin-top-left" : "right-0 origin-top-right";
+  const { triggerRef, bubbleRef, open, pos, isTouch, openTooltip, closeTooltip, toggleTooltip } =
+    useTooltip<HTMLButtonElement>();
   return (
     <button
+      ref={triggerRef}
       type="button"
       aria-pressed={active}
       aria-label={VARIANT_TOOLTIP[variant]}
-      className={`group relative tab-btn !px-3 !py-1.5 !text-xs ${active ? "active" : ""}`}
-      onClick={onClick}
+      className={`relative tab-btn !px-3 !py-1.5 !text-xs ${active ? "active" : ""}`}
+      onClick={() => {
+        onClick();
+        if (isTouch) toggleTooltip();
+      }}
+      onMouseEnter={!isTouch ? openTooltip : undefined}
+      onMouseLeave={!isTouch ? closeTooltip : undefined}
     >
       {VARIANT_LABEL[variant]}
-      <span
-        role="tooltip"
-        className={`pointer-events-none absolute top-full z-50 mt-1.5 w-72 max-w-[calc(100vw-2rem)] scale-95 whitespace-normal break-words rounded-lg border border-line bg-card p-2.5 text-xs font-normal normal-case leading-snug tracking-normal text-ink3 opacity-0 shadow-lg transition-all duration-150 group-hover:scale-100 group-hover:opacity-100 ${posClass}`}
-      >
+      <TooltipBubble bubbleRef={bubbleRef} pos={pos} open={open}>
         {VARIANT_TOOLTIP[variant]}
-      </span>
+      </TooltipBubble>
     </button>
   );
 }
@@ -66,13 +70,11 @@ export default function VariantToggle({ className }: { className?: string }) {
       <VariantButton
         variant="calibrated"
         active={variant === "calibrated"}
-        align="left"
         onClick={() => setVariant("calibrated")}
       />
       <VariantButton
         variant="textbook"
         active={variant === "textbook"}
-        align="right"
         onClick={() => setVariant("textbook")}
       />
     </div>
