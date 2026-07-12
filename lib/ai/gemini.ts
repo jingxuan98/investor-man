@@ -247,9 +247,13 @@ async function runModelChain<T>(
 
 export async function geminiJSON<T>(
   prompt: string,
-  apiKey?: string
+  apiKey?: string,
+  // Optional chain override — e.g. the competitors fallback runs gemma-only
+  // to keep the scarce gemini-flash daily quota for reports/story drafts.
+  modelsOverride?: string[]
 ): Promise<ChainResult<T>> {
-  const { key, models } = cfg(apiKey);
+  const { key, models: defaultModels } = cfg(apiKey);
+  const models = modelsOverride?.length ? modelsOverride : defaultModels;
   return runModelChain<T>(
     models,
     (model) =>

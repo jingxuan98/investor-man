@@ -40,7 +40,10 @@ export async function GET(
       `List the 5 closest publicly listed competitors of the US-listed stock ${T}. ` +
         `US-listed tickers only. Respond ONLY with a JSON array: ` +
         `[{"ticker": "XXX", "name": "Company Name"}]. Do not include ${T} itself.`,
-      apiKey
+      apiKey,
+      // gemma-only: a competitor list is an easy task, and gemini-flash's
+      // small daily quota is reserved for AI Insights reports/story drafts.
+      ["gemma-4-31b-it"]
     );
     const comps = parseCompetitors(raw);
     // Only cache non-empty lists so a transient bad LLM response is retried.

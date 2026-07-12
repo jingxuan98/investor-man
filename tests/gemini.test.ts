@@ -468,3 +468,27 @@ test("scrubReasoningLeak: a short legit response with no heading at all passes t
   const out = await readAll(scrubReasoningLeak(streamFromChunks([text])));
   expect(out).toBe(text);
 });
+
+test("geminiJSON: modelsOverride replaces the default chain", async () => {
+  process.env.GEMINI_API_KEY = "test-key";
+  delete process.env.GEMINI_MODEL;
+  delete process.env.GEMINI_FALLBACK_MODELS;
+  const tried: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: any) => {
+    tried.push(String(url));
+    return new Response(
+      JSON.stringify({ candidates: [{ content: { parts: [{ text: "[]" }] } }] }),
+      { status: 200 }
+    );
+  }) as any;
+  try {
+    const { geminiJSON } = await import("@/lib/ai/gemini");
+    const { model } = await geminiJSON("x", undefined, ["gemma-4-31b-it"]);
+    expect(model).toBe("gemma-4-31b-it");
+    expect(tried).toHaveLength(1);
+    expect(tried[0]).toContain("/gemma-4-31b-it:");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
