@@ -176,3 +176,10 @@ test("playbook prompt has all four sections, injects the live price, and anchors
   expect(playbook).toContain("bears have been saying recently");
   expect(playbook).toContain("If the thesis breaks");
 });
+
+test("every prompt anchors today's date so non-grounded models can't assume their cutoff", () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const { prompt } = buildPrompt("playbook", bundle());
+  expect(prompt).toContain(`TODAY'S DATE: ${today}`);
+  expect(prompt).toContain("may be outdated");
+});

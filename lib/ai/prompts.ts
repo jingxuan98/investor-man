@@ -34,6 +34,10 @@ function dataBlock(b: StockBundle): string {
     ].join(", ")
   );
   return (
+    // Today's date anchors the timeline: without it a non-grounded fallback
+    // model (gemma — no search access) silently assumes its training-cutoff
+    // year and presents stale "current" catalysts/sentiment as if live.
+    `TODAY'S DATE: ${new Date().toISOString().slice(0, 10)}. If you do not have live web search access, any market events/news you recall may predate today — date such claims explicitly and say they may be outdated.\n` +
     `VERIFIED FINANCIAL DATA for ${s.name} (${s.ticker}), currency ${s.currency}, ` +
     `current price ${s.price}, market cap ${fmtBig(s.marketCap)}, trailing EPS ${s.trailingEPS}, beta ${s.beta}:\n` +
     rows.join("\n") +

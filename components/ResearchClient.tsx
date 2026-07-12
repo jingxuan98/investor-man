@@ -256,7 +256,14 @@ export default function ResearchClient({
 
       {active && !error && (
         <div className="card p-6">
-          <ModelCaption model={model} cached={cached} />
+          <ModelCaption
+            model={model}
+            cached={cached}
+            // Types whose prompt relies on live Google Search (buildPrompt's
+            // grounding flag) — a non-gemini serve of these warrants the
+            // stale-data warning in the caption.
+            grounded={["research", "bear", "bull", "risks", "playbook"].includes(active)}
+          />
           {streaming && text === "" && (
             <p className="text-sm text-ink2">
               Generating — can take a minute or two when free-tier models are busy…

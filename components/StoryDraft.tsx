@@ -144,7 +144,8 @@ export default function StoryDraft({ ticker }: { ticker: string }) {
 
       {started && !error && (
         <div className="rounded-lg border border-line bg-page p-6">
-          <ModelCaption model={model} cached={cached} />
+          {/* story grounds (BLOCK 2B market narratives) — warn on non-gemini serves */}
+          <ModelCaption model={model} cached={cached} grounded />
           {streaming && text === "" && (
             <p className="text-sm text-ink2">
               Generating — can take a minute or two when free-tier models are busy…
