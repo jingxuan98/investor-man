@@ -67,7 +67,7 @@ test("modelChain: defaults apply when env vars are unset", () => {
   delete process.env.GEMINI_MODEL;
   delete process.env.GEMINI_FALLBACK_MODELS;
   expect(modelChain()).toEqual([
-    "gemini-2.5-flash",
+    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
     "gemma-4-31b-it",
   ]);

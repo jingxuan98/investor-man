@@ -6,7 +6,10 @@ const BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 // comma-separated GEMINI_FALLBACK_MODELS. Exported so the parse/order logic can
 // be unit-tested without a network or an API key.
 export function modelChain(): string[] {
-  const primary = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+  // Default primary must match .env.local's GEMINI_MODEL — prod (Vercel) sets
+  // no env vars and runs on this default; it briefly shipped as 2.5-flash and
+  // silently served an older model than intended (caught via the model badge).
+  const primary = process.env.GEMINI_MODEL ?? "gemini-3.5-flash";
   const fallbacks = (
     process.env.GEMINI_FALLBACK_MODELS ?? "gemini-3.1-flash-lite,gemma-4-31b-it"
   )
