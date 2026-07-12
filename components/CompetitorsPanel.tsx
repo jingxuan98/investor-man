@@ -23,6 +23,22 @@ interface Summary {
   peg: number | null;
 }
 
+// Subject stock's own row — computed server-side by page.tsx (same
+// fair-value/upside formula app/api/summary/[ticker]/route.ts uses for
+// peers), for BOTH variants so this component can pick calibrated vs
+// textbook from its own useVariant() state without an extra fetch (mirrors
+// OverviewStats's `stats={{ calibrated, textbook }}` prop pattern). P/E and
+// PEG aren't variant-dependent, so those are plain numbers.
+export interface SelfSummary {
+  ticker: string;
+  name: string;
+  price: number | null;
+  trailingPE: number | null;
+  peg: number | null;
+  calibrated: { fairValue: number | null; upside: number | null };
+  textbook: { fairValue: number | null; upside: number | null };
+}
+
 // A row is either still loading its summary (undefined), failed (null),
 // or resolved (Summary).
 type RowState = Summary | null | undefined;
@@ -46,9 +62,11 @@ function pegClass(peg: number | null): string {
 export default function CompetitorsPanel({
   ticker,
   sector,
+  self,
 }: {
   ticker: string;
   sector?: string | null;
+  self: SelfSummary;
 }) {
   // Global calibrated/textbook selection — peer fair-value/upside must match
   // the SAME variant as the subject stock's own tabs (task brief: "sector-
@@ -127,32 +145,112 @@ export default function CompetitorsPanel({
     // No cleanup: the next run bumping runId is what retires this one.
   }, [ticker, variant]);
 
+  // Subject stock's own row — calibrated vs textbook picked from this
+  // component's own useVariant() state (same idea as InsightPeerPanel's
+  // metricOf picking quality vs upside off its own `view` state). No fetch
+  // needed: all fields come from the server-computed `self` prop, so this
+  // row is independent of listState and renders in every branch below.
+  const selfVariant = self[variant];
+  const selfRow = (
+    <tr className="border-t border-line bg-accent-tint">
+      <td className="px-4 py-3">
+        <span className="font-semibold text-ink">{self.name}</span>
+        <span className="ml-2 text-ink2">{self.ticker}</span>
+        <span className="ml-2 text-xs text-ink2">· this stock</span>
+      </td>
+      <td className="num px-4 py-3 text-right font-semibold text-ink">
+        {fmtMoney(selfVariant.fairValue)}
+      </td>
+      <td className="num px-4 py-3 text-right font-semibold text-ink">{fmtMoney(self.price)}</td>
+      <td
+        className={`num px-4 py-3 text-right font-semibold ${upsideClass(selfVariant.upside)}`}
+      >
+        {fmtPct(selfVariant.upside)}
+      </td>
+      <td className="num px-4 py-3 text-right font-semibold text-ink">
+        {fmtRatio(self.trailingPE)}
+      </td>
+      <td className={`num px-4 py-3 text-right font-semibold ${pegClass(self.peg)}`}>
+        {fmtRatio(self.peg)}
+      </td>
+    </tr>
+  );
+
+  const tableHead = (
+    <thead className="bg-page text-left text-ink2">
+      <tr>
+        <th className="px-4 py-2 text-[11px] font-medium uppercase tracking-wide">Company</th>
+        <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
+          Fair value
+        </th>
+        <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
+          Price
+        </th>
+        <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
+          Upside
+        </th>
+        <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
+          P/E
+        </th>
+        <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
+          <Term k="pegVsSector">PEG</Term>
+        </th>
+      </tr>
+    </thead>
+  );
+
   if (listState === "error") {
     return (
-      <p className="text-sm text-ink2">
-        Competitors unavailable
-        {noApiKey &&
-          " — click the key icon in the header to add your free Gemini API key (aistudio.google.com/apikey)."}
-        {transient && " — try again shortly."}
-      </p>
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-max text-sm">
+            {tableHead}
+            <tbody>{selfRow}</tbody>
+          </table>
+        </div>
+        <p className="px-4 py-3 text-sm text-ink2">
+          Competitors unavailable
+          {noApiKey &&
+            " — click the key icon in the header to add your free Gemini API key (aistudio.google.com/apikey)."}
+          {transient && " — try again shortly."}
+        </p>
+      </div>
     );
   }
 
   if (listState === "loading") {
     return (
-      <div className="space-y-2">
-        <p className="text-sm text-ink2">
-          Generating — can take a minute or two when free-tier models are busy…
-        </p>
-        {[0, 1, 2, 3, 4].map((i) => (
-          <div key={i} className="h-14 animate-pulse rounded-lg border border-line bg-track" />
-        ))}
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-max text-sm">
+            {tableHead}
+            <tbody>{selfRow}</tbody>
+          </table>
+        </div>
+        <div className="space-y-2 p-4">
+          <p className="text-sm text-ink2">
+            Generating — can take a minute or two when free-tier models are busy…
+          </p>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-14 animate-pulse rounded-lg border border-line bg-track" />
+          ))}
+        </div>
       </div>
     );
   }
 
   if (competitors.length === 0) {
-    return <p className="text-sm text-ink2">No competitors found</p>;
+    return (
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-max text-sm">
+            {tableHead}
+            <tbody>{selfRow}</tbody>
+          </table>
+        </div>
+        <p className="px-4 py-3 text-sm text-ink2">No competitors found</p>
+      </div>
+    );
   }
 
   return (
@@ -161,27 +259,9 @@ export default function CompetitorsPanel({
           card on narrow viewports instead of clipping/squishing. */}
       <div className="overflow-x-auto">
       <table className="w-full min-w-max text-sm">
-        <thead className="bg-page text-left text-ink2">
-          <tr>
-            <th className="px-4 py-2 text-[11px] font-medium uppercase tracking-wide">Company</th>
-            <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
-              Fair value
-            </th>
-            <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
-              Price
-            </th>
-            <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
-              Upside
-            </th>
-            <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
-              P/E
-            </th>
-            <th className="px-4 py-2 text-right text-[11px] font-medium uppercase tracking-wide">
-              <Term k="pegVsSector">PEG</Term>
-            </th>
-          </tr>
-        </thead>
+        {tableHead}
         <tbody>
+          {selfRow}
           {competitors.map((c) => {
             const row = rows[c.ticker];
             const loading = row === undefined;
