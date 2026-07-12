@@ -50,7 +50,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "bad_type" }, { status: 400 });
   }
 
-  const cacheKey = `research:${ticker}:${type}:${variant}`;
+  // v2: story prompt gained BLOCK 2B (market narratives) — version the key so
+  // drafts cached under the old prompt regenerate instead of serving stale shape.
+  const cacheKey = `research:${ticker}:${type}:${variant}:v2`;
 
   // Cached hit → return the whole body at once.
   if (!force) {

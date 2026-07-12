@@ -163,7 +163,8 @@ function storyPrompt(b: StockBundle): string {
   return (
     `Below is a machine-drafted analyst note for ${b.snapshot.name} (${b.snapshot.ticker}), generated directly from our valuation model with no AI involved yet:\n\n` +
     draft +
-    `\n\nRewrite blocks 1-3 above as a professional but plain-English analyst note. Keep every number exactly as given — do not invent, round differently, or add any fact not present above. Preserve the three-block structure (The Answer, The Narrative, The Thesis) but improve the prose.`
+    `\n\nRewrite blocks 1-3 above as a professional but plain-English analyst note. Keep every number exactly as given — do not invent, round differently, or add any fact not present above. Preserve the three-block structure (The Answer, The Narrative, The Thesis) but improve the prose.` +
+    `\n\nThen APPEND one extra block:\nBLOCK 2B — MARKET NARRATIVES\nTwo short subsections describing what investors CURRENTLY believe about ${b.snapshot.ticker} (use recent news, earnings reactions and commentary if search is available; otherwise infer honestly from the data above and say so):\n- **The bull narrative** — the story buyers at today's price are telling; the 2-3 strongest arguments supporting it, and which single metric above would CONFIRM it.\n- **The bear narrative** — the skeptics' story; its 2-3 strongest arguments, and which single metric above would confirm THAT.\nEnd with one sentence on which narrative our model's numbers currently side with, and why.`
   );
 }
 
@@ -191,7 +192,10 @@ export function buildPrompt(
         grounding: false,
       };
     case "story":
-      return { prompt: block + storyPrompt(bundle) + MARKDOWN_INSTRUCTION, grounding: false };
+      // Grounding on: BLOCK 2B asks for CURRENT market narratives, which need
+      // recent news/commentary. Non-gemini fallbacks silently drop grounding
+      // (see lib/ai/gemini.ts) and the prompt tells the model to infer honestly.
+      return { prompt: block + storyPrompt(bundle) + MARKDOWN_INSTRUCTION, grounding: true };
   }
 }
 

@@ -44,7 +44,8 @@ test("grounding flags per type", () => {
   expect(buildPrompt("risks", bundle()).grounding).toBe(true);
   expect(buildPrompt("model3", bundle()).grounding).toBe(false);
   expect(buildPrompt("deepdive", bundle()).grounding).toBe(false);
-  expect(buildPrompt("story", bundle()).grounding).toBe(false);
+  // story grounds: BLOCK 2B asks for current market narratives
+  expect(buildPrompt("story", bundle()).grounding).toBe(true);
 });
 
 test("bull prompt injects the live price like bear does", () => {
@@ -114,6 +115,9 @@ test("story prompt embeds the machine-drafted blocks and a rewrite instruction, 
   expect(story).toContain("BLOCK 1 — THE ANSWER");
   expect(story).toContain("BLOCK 2 — THE NARRATIVE");
   expect(story).toContain("BLOCK 3 — THE THESIS, NUMBERED");
+  expect(story).toContain("BLOCK 2B — MARKET NARRATIVES");
+  expect(story).toContain("bull narrative");
+  expect(story).toContain("bear narrative");
   expect(story).toContain("do not invent");
   expect(story).toContain("Format the entire response as clean Markdown");
 });
